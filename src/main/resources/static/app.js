@@ -17,8 +17,16 @@ const editor = document.getElementById("editor");
 const editorPath = document.getElementById("editor-path");
 const saveFile = document.getElementById("save-file");
 
+// Skills panel elements
+const refreshSkills = document.getElementById("refresh-skills");
+const workerRoleSelect = document.getElementById("worker-role");
+const skillsTabs = document.querySelectorAll(".skills-tabs .tab");
+const skillsPanels = document.querySelectorAll(".skills-panel");
+
 let currentPath = "";
 let selectedFile = "";
+let skillsData = null;
+let currentWorkerRole = "";
 
 const setStatus = (message) => {
   chatStatus.textContent = message;
@@ -249,7 +257,242 @@ refreshFiles.addEventListener("click", () => loadFiles(currentPath));
 saveFile.addEventListener("click", saveCurrentFile);
 createFile.addEventListener("click", createNewFile);
 
+// Skills management functions
+const loadSkills = async () => {
+  try {
+    skillsData = await fetchJson("/api/config/skills");
+    renderSkillsForCurrentTab();
+    populateWorkerRoles();
+  } catch (error) {
+    console.error("Failed to load skills:", error);
+  }
+};
+
+const populateWorkerRoles = () => {
+  if (!skillsData || !skillsData.workerRoles) return;
+  workerRoleSelect.innerHTML = "";
+  skillsData.workerRoles.forEach((role) => {
+    const option = document.createElement("option");
+    option.value = role;
+    option.textContent = role.charAt(0).toUpperCase() + role.slice(1);
+    workerRoleSelect.appendChild(option);
+  });
+  if (skillsData.workerRoles.length > 0) {
+    currentWorkerRole = skillsData.workerRoles[0];
+    workerRoleSelect.value = currentWorkerRole;
+  }
+};
+
+const renderSkillsForCurrentTab = () => {
+  if (!skillsData) return;
+  const activeTab = document.querySelector(".skills-tabs .tab.active")?.dataset.tab;
+  if (!activeTab) return;
+
+  switch (activeTab) {
+    case "orchestrator":
+      renderSkillsList("orchestrator-skills", skillsData.orchestrator, "orchestrator");
+      break;
+    case "synthesis":
+      renderSkillsList("synthesis-skills", skillsData.synthesis, "synthesis");
+      break;
+    case "worker-defaults":
+      renderSkillsList("worker-defaults-skills", skillsData.workerDefaults, "worker-defaults");
+      break;
+    case "workers":
+      const roleSkills = skillsData.workers[currentWorkerRole] || [];
+      renderSkillsList("worker-role-skills", roleSkills, `workers/${currentWorkerRole}`);
+      break;
+  }
+};
+
+const renderSkillsList = (containerId, skills, agentType) => {
+  const container = document.getElementById(containerId);
+  container.innerHTML = "";
+
+  if (!skills || skills.length === 0) {
+    const empty = document.createElement("div");
+    empty.classList.add("empty-skills");
+    empty.textContent = "No skills configured.";
+    container.appendChild(empty);
+    return;
+  }
+
+  skills.forEach((skill, index) => {
+    const card = document.createElement("div");
+    card.classList.add("skill-card");
+
+    const header = document.createElement("div");
+    header.classList.add("skill-header");
+
+    const name = document.createElement("span");
+    name.classList.add("skill-name");
+    name.textContent = skill.name || "Unnamed Skill";
+
+    const actions = document.createElement("div");
+    actions.classList.add("skill-actions");
+
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "Edit";
+    editBtn.classList.add("ghost");
+    editBtn.addEventListener("click", () => openSkillModal(agentType, index, skill));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.textContent = "Delete";
+    deleteBtn.classList.add("ghost");
+    deleteBtn.addEventListener("click", () => deleteSkill(agentType, index));
+
+    actions.appendChild(editBtn);
+    actions.appendChild(deleteBtn);
+    header.appendChild(name);
+    header.appendChild(actions);
+
+    const desc = document.createElement("div");
+    desc.classList.add("skill-desc");
+    desc.textContent = skill.description || "";
+
+    const instructions = document.createElement("div");
+    instructions.classList.add("skill-instructions");
+    instructions.textContent = skill.instructions || "No instructions";
+
+    card.appendChild(header);
+    if (skill.description) card.appendChild(desc);
+    card.appendChild(instructions);
+    container.appendChild(card);
+  });
+};
+
+const openSkillModal = (agentType, index, skill = null) => {
+  const isNew = skill === null;
+  const overlay = document.createElement("div");
+  overlay.classList.add("modal-overlay");
+
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>${isNew ? "Add" : "Edit"} Skill</h3>
+      <div class="form-group">
+        <label for="skill-name">Name</label>
+        <input type="text" id="skill-name" value="${skill?.name || ""}" placeholder="e.g., Java Expert">
+      </div>
+      <div class="form-group">
+        <label for="skill-desc">Description</label>
+        <input type="text" id="skill-desc" value="${skill?.description || ""}" placeholder="Brief description">
+      </div>
+      <div class="form-group">
+        <label for="skill-instructions">Instructions</label>
+        <textarea id="skill-instructions" placeholder="Detailed instructions for the agent...">${skill?.instructions || ""}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="cancel">Cancel</button>
+        <button class="save">Save</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector(".cancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  overlay.querySelector(".save").addEventListener("click", async () => {
+    const newSkill = {
+      name: document.getElementById("skill-name").value,
+      description: document.getElementById("skill-desc").value,
+      instructions: document.getElementById("skill-instructions").value,
+    };
+    await saveSkill(agentType, index, newSkill, isNew);
+    overlay.remove();
+  });
+};
+
+const saveSkill = async (agentType, index, skill, isNew) => {
+  let skills = getSkillsForAgentType(agentType);
+  if (isNew) {
+    skills.push(skill);
+  } else {
+    skills[index] = skill;
+  }
+
+  try {
+    await fetchJson(`/api/config/skills/${agentType}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(skills),
+    });
+    await loadSkills();
+  } catch (error) {
+    console.error("Failed to save skill:", error);
+  }
+};
+
+const deleteSkill = async (agentType, index) => {
+  if (!confirm("Are you sure you want to delete this skill?")) return;
+
+  let skills = getSkillsForAgentType(agentType);
+  skills.splice(index, 1);
+
+  try {
+    await fetchJson(`/api/config/skills/${agentType}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(skills),
+    });
+    await loadSkills();
+  } catch (error) {
+    console.error("Failed to delete skill:", error);
+  }
+};
+
+const getSkillsForAgentType = (agentType) => {
+  if (agentType === "orchestrator") return [...skillsData.orchestrator];
+  if (agentType === "synthesis") return [...skillsData.synthesis];
+  if (agentType === "worker-defaults") return [...skillsData.workerDefaults];
+  if (agentType.startsWith("workers/")) {
+    const role = agentType.replace("workers/", "");
+    return [...(skillsData.workers[role] || [])];
+  }
+  return [];
+};
+
+// Tab switching
+skillsTabs.forEach((tab) => {
+  tab.addEventListener("click", () => {
+    skillsTabs.forEach((t) => t.classList.remove("active"));
+    skillsPanels.forEach((p) => p.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById(`skills-${tab.dataset.tab}`).classList.add("active");
+    renderSkillsForCurrentTab();
+  });
+});
+
+// Worker role selection
+workerRoleSelect.addEventListener("change", (e) => {
+  currentWorkerRole = e.target.value;
+  renderSkillsForCurrentTab();
+});
+
+// Add skill buttons
+document.getElementById("add-orchestrator-skill").addEventListener("click", () => {
+  openSkillModal("orchestrator", -1, null);
+});
+
+document.getElementById("add-synthesis-skill").addEventListener("click", () => {
+  openSkillModal("synthesis", -1, null);
+});
+
+document.getElementById("add-worker-defaults-skill").addEventListener("click", () => {
+  openSkillModal("worker-defaults", -1, null);
+});
+
+document.getElementById("add-worker-role-skill").addEventListener("click", () => {
+  openSkillModal(`workers/${currentWorkerRole}`, -1, null);
+});
+
+refreshSkills.addEventListener("click", loadSkills);
+
 window.addEventListener("load", () => {
   loadFiles();
+  loadSkills();
   setConnection("Workspace loaded");
 });

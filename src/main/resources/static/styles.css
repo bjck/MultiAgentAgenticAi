@@ -90,6 +90,10 @@ h1 {
   gap: 24px;
 }
 
+.grid.three-col {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -266,9 +270,217 @@ button:hover {
   min-height: 220px;
 }
 
+/* Skills panel styles */
+.skills-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.skills-tabs .tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.skills-tabs .tab.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.skills-content {
+  flex: 1;
+  overflow: auto;
+}
+
+.skills-panel {
+  display: none;
+}
+
+.skills-panel.active {
+  display: block;
+}
+
+.skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.skill-card {
+  background: #faf9f7;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.skill-card .skill-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.skill-card .skill-name {
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.skill-card .skill-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.skill-card .skill-actions button {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.skill-card .skill-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.skill-card .skill-instructions {
+  font-size: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--ink);
+  background: #f3f1ed;
+  padding: 8px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.add-skill {
+  margin-top: 10px;
+  width: 100%;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.add-skill:hover {
+  background: #faf9f7;
+  color: var(--accent);
+}
+
+.worker-role-select {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.worker-role-select label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.worker-role-select select {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #faf9f7;
+  font-family: inherit;
+}
+
+/* Skill edit modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--panel);
+  border-radius: 16px;
+  padding: 24px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: var(--shadow);
+}
+
+.modal h3 {
+  margin: 0 0 16px;
+}
+
+.modal .form-group {
+  margin-bottom: 12px;
+}
+
+.modal .form-group label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.modal .form-group input,
+.modal .form-group textarea {
+  width: 100%;
+}
+
+.modal .form-group textarea {
+  min-height: 100px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modal-actions .cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.empty-skills {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+}
+
+@media (max-width: 1200px) {
+  .grid.three-col {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .panel.skills {
+    grid-column: span 2;
+  }
+}
+
 @media (max-width: 980px) {
-  .grid {
+  .grid,
+  .grid.three-col {
     grid-template-columns: 1fr;
+  }
+
+  .panel.skills {
+    grid-column: span 1;
   }
 
   .hero {
