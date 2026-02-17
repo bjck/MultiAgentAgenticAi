@@ -21,11 +21,31 @@
       </div>
     </header>
 
-    <main class="grid three-col">
+    <main class="grid">
       <section class="panel chat">
         <div class="panel-header">
           <h2>Orchestrator</h2>
           <button id="clear-chat" class="ghost">Clear</button>
+        </div>
+        <div id="chat-output" class="chat-output">
+          <details class="card fold">
+            <summary>
+              <span>Plan</span>
+              <span class="fold-hint" data-open="Hide" data-closed="Show"></span>
+            </summary>
+            <div id="plan-output" class="empty">No plan yet.</div>
+          </details>
+          <details class="card fold">
+            <summary>
+              <span>Worker outputs</span>
+              <span class="fold-hint" data-open="Hide" data-closed="Show"></span>
+            </summary>
+            <div id="worker-output" class="empty">No worker output yet.</div>
+          </details>
+          <div class="card">
+            <h3>Final response</h3>
+            <div id="final-output" class="empty">No response yet.</div>
+          </div>
         </div>
         <form id="chat-form" class="chat-form">
           <label for="chat-input">Describe the feature you want to build</label>
@@ -36,84 +56,84 @@
             <span id="chat-status">Awaiting input.</span>
           </div>
         </form>
-        <div id="chat-output" class="chat-output">
-          <div class="card">
-            <h3>Plan</h3>
-            <div id="plan-output" class="empty">No plan yet.</div>
-          </div>
-          <div class="card">
-            <h3>Worker outputs</h3>
-            <div id="worker-output" class="empty">No worker output yet.</div>
-          </div>
-          <div class="card">
-            <h3>Final response</h3>
-            <div id="final-output" class="empty">No response yet.</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel skills">
-        <div class="panel-header">
-          <h2>Agent Skills</h2>
-          <button id="refresh-skills" class="ghost">Refresh</button>
-        </div>
-        <div class="skills-tabs">
-          <button class="tab active" data-tab="orchestrator">Orchestrator</button>
-          <button class="tab" data-tab="synthesis">Synthesis</button>
-          <button class="tab" data-tab="worker-defaults">Worker Defaults</button>
-          <button class="tab" data-tab="workers">Worker Roles</button>
-        </div>
-        <div class="skills-content">
-          <div id="skills-orchestrator" class="skills-panel active">
-            <div class="skills-list" id="orchestrator-skills"></div>
-            <button id="add-orchestrator-skill" class="add-skill">+ Add Skill</button>
-          </div>
-          <div id="skills-synthesis" class="skills-panel">
-            <div class="skills-list" id="synthesis-skills"></div>
-            <button id="add-synthesis-skill" class="add-skill">+ Add Skill</button>
-          </div>
-          <div id="skills-worker-defaults" class="skills-panel">
-            <div class="skills-list" id="worker-defaults-skills"></div>
-            <button id="add-worker-defaults-skill" class="add-skill">+ Add Skill</button>
-          </div>
-          <div id="skills-workers" class="skills-panel">
-            <div class="worker-role-select">
-              <label for="worker-role">Select Role:</label>
-              <select id="worker-role"></select>
-            </div>
-            <div class="skills-list" id="worker-role-skills"></div>
-            <button id="add-worker-role-skill" class="add-skill">+ Add Skill</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel files">
-        <div class="panel-header">
-          <h2>Workspace</h2>
-          <div class="panel-actions">
-            <button id="refresh-files" class="ghost">Refresh</button>
-          </div>
-        </div>
-        <div class="path-bar">
-          <button id="up-dir" class="ghost">Up</button>
-          <input id="path-display" type="text" readonly value="">
-        </div>
-        <div class="file-tools">
-          <input id="new-file-name" type="text" placeholder="new-file.txt or folder/new-file.txt">
-          <button id="create-file">Create</button>
-        </div>
-        <div class="file-list" id="file-list"></div>
-        <div class="editor">
-          <div class="editor-header">
-            <span id="editor-path">No file selected</span>
-            <div class="editor-actions">
-              <button id="save-file">Save</button>
-            </div>
-          </div>
-          <textarea id="editor" spellcheck="false" placeholder="Select a file to view or edit."></textarea>
-        </div>
       </section>
     </main>
+
+    <div class="floating-tools" aria-label="Open tools">
+      <button class="tool-button" data-side="skills" type="button">Skills</button>
+      <button class="tool-button" data-side="files" type="button">Workspace</button>
+    </div>
+
+    <div id="drawer-overlay" class="drawer-overlay" tabindex="-1" aria-hidden="true"></div>
+    <aside id="drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-header">
+        <h2>Tools</h2>
+        <button id="drawer-close" class="ghost" type="button">Close</button>
+      </div>
+      <div class="drawer-body">
+        <section id="side-skills" class="panel skills side-panel active">
+          <div class="panel-header">
+            <h2>Agent Skills</h2>
+            <button id="refresh-skills" class="ghost">Refresh</button>
+          </div>
+          <div class="skills-tabs">
+            <button class="tab active" data-tab="orchestrator">Orchestrator</button>
+            <button class="tab" data-tab="synthesis">Synthesis</button>
+            <button class="tab" data-tab="worker-defaults">Worker Defaults</button>
+            <button class="tab" data-tab="workers">Worker Roles</button>
+          </div>
+          <div class="skills-content">
+            <div id="skills-orchestrator" class="skills-panel active">
+              <div class="skills-list" id="orchestrator-skills"></div>
+              <button id="add-orchestrator-skill" class="add-skill">+ Add Skill</button>
+            </div>
+            <div id="skills-synthesis" class="skills-panel">
+              <div class="skills-list" id="synthesis-skills"></div>
+              <button id="add-synthesis-skill" class="add-skill">+ Add Skill</button>
+            </div>
+            <div id="skills-worker-defaults" class="skills-panel">
+              <div class="skills-list" id="worker-defaults-skills"></div>
+              <button id="add-worker-defaults-skill" class="add-skill">+ Add Skill</button>
+            </div>
+            <div id="skills-workers" class="skills-panel">
+              <div class="worker-role-select">
+                <label for="worker-role">Select Role:</label>
+                <select id="worker-role"></select>
+              </div>
+              <div class="skills-list" id="worker-role-skills"></div>
+              <button id="add-worker-role-skill" class="add-skill">+ Add Skill</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="side-files" class="panel files side-panel">
+          <div class="panel-header">
+            <h2>Workspace</h2>
+            <div class="panel-actions">
+              <button id="refresh-files" class="ghost">Refresh</button>
+            </div>
+          </div>
+          <div class="path-bar">
+            <button id="up-dir" class="ghost">Up</button>
+            <input id="path-display" type="text" readonly value="">
+          </div>
+          <div class="file-tools">
+            <input id="new-file-name" type="text" placeholder="new-file.txt or folder/new-file.txt">
+            <button id="create-file">Create</button>
+          </div>
+          <div class="file-list" id="file-list"></div>
+          <div class="editor">
+            <div class="editor-header">
+              <span id="editor-path">No file selected</span>
+              <div class="editor-actions">
+                <button id="save-file">Save</button>
+              </div>
+            </div>
+            <textarea id="editor" spellcheck="false" placeholder="Select a file to view or edit."></textarea>
+          </div>
+        </section>
+      </div>
+    </aside>
   </div>
   <script src="app.js"></script>
 </body>
