@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: multiagent
+  ai:
+    model:
+      chat: google-genai
+    google:
+      genai:
+        api-key: ${GOOGLE_API_KEY}
+        chat:
+          options:
+            model: gemini-2.5-flash
+    mcp:
+      client:
+        type: SYNC
+        toolcallback:
+          enabled: true
+        stdio:
+          root-change-notification: true
+          connections:
+            filesystem:
+              command: ${MCP_FS_COMMAND:cmd.exe}
+              args:
+                - ${MCP_FS_ARG0:/c}
+                - ${MCP_FS_ARG1:npx}
+                - ${MCP_FS_ARG2:-y}
+                - ${MCP_FS_ARG3:@modelcontextprotocol/server-filesystem}
+                - ${MCP_FS_ROOT:${multiagent.workspace-root}}
+
+multiagent:
+  max-tasks: 4
+  worker-concurrency: 4
+  worker-timeout: 90s
+  workspace-root: ${WORKSPACE_ROOT:${user.dir}}
+  worker-roles:
+    - research
+    - design
+    - engineering
+    - qa
+    - writing
+    - general
