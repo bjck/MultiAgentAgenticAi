@@ -15,6 +15,7 @@ public class MultiAgentProperties {
     private List<String> workerRoles = new ArrayList<>(
             List.of("research", "design", "engineering", "qa", "writing", "general"));
     private String workspaceRoot;
+    private AgentSkillsConfig skills = new AgentSkillsConfig();
 
     public int getMaxTasks() {
         return maxTasks;
@@ -57,5 +58,13 @@ public class MultiAgentProperties {
 
     public void setWorkspaceRoot(String workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
+    }
+
+    public AgentSkillsConfig getSkills() {
+        return skills;
+    }
+
+    public void setSkills(AgentSkillsConfig skills) {
+        this.skills = skills != null ? skills : new AgentSkillsConfig();
     }
 }

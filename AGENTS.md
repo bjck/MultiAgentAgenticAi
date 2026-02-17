@@ -65,3 +65,48 @@ multiagent:
   worker-concurrency: 4  # Thread pool size for workers
   worker-timeout: 90s    # Per-worker timeout
 ```
+
+## Agent Skills Configuration
+
+Skills can be assigned to agents to provide specialized instructions and capabilities. Each skill has a name, description, and instructions that are included in the agent's system prompt.
+
+### Configuration Structure
+
+```yaml
+multiagent:
+  skills:
+    # Skills for the orchestrator agent (planning phase)
+    orchestrator:
+      - name: "Domain Expert"
+        description: "Expertise in specific domain"
+        instructions: "Apply domain knowledge when planning tasks"
+    
+    # Skills for the synthesis agent (combining worker outputs)
+    synthesis:
+      - name: "Report Writer"
+        description: "Expert at writing reports"
+        instructions: "Format output as a structured report"
+    
+    # Default skills applied to all worker agents
+    worker-defaults:
+      - name: "Best Practices"
+        description: "Follow coding best practices"
+        instructions: "Always follow SOLID principles"
+    
+    # Role-specific skills for worker agents
+    workers:
+      engineering:
+        - name: "Java Expert"
+          description: "Expertise in Java development"
+          instructions: "Use modern Java features and patterns"
+      research:
+        - name: "Academic Research"
+          description: "Academic research methodology"
+          instructions: "Cite sources and use proper methodology"
+```
+
+### Skill Properties
+
+- `name` - Short identifier for the skill
+- `description` - Brief explanation of what the skill provides
+- `instructions` - Detailed instructions to guide the agent's behavior
