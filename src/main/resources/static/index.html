@@ -20,7 +20,7 @@
       </div>
     </header>
 
-    <main class="grid">
+    <main class="grid three-col">
       <section class="panel chat">
         <div class="panel-header">
           <h2>Orchestrator</h2>
@@ -46,6 +46,41 @@
           <div class="card">
             <h3>Final response</h3>
             <div id="final-output" class="empty">No response yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel skills">
+        <div class="panel-header">
+          <h2>Agent Skills</h2>
+          <button id="refresh-skills" class="ghost">Refresh</button>
+        </div>
+        <div class="skills-tabs">
+          <button class="tab active" data-tab="orchestrator">Orchestrator</button>
+          <button class="tab" data-tab="synthesis">Synthesis</button>
+          <button class="tab" data-tab="worker-defaults">Worker Defaults</button>
+          <button class="tab" data-tab="workers">Worker Roles</button>
+        </div>
+        <div class="skills-content">
+          <div id="skills-orchestrator" class="skills-panel active">
+            <div class="skills-list" id="orchestrator-skills"></div>
+            <button id="add-orchestrator-skill" class="add-skill">+ Add Skill</button>
+          </div>
+          <div id="skills-synthesis" class="skills-panel">
+            <div class="skills-list" id="synthesis-skills"></div>
+            <button id="add-synthesis-skill" class="add-skill">+ Add Skill</button>
+          </div>
+          <div id="skills-worker-defaults" class="skills-panel">
+            <div class="skills-list" id="worker-defaults-skills"></div>
+            <button id="add-worker-defaults-skill" class="add-skill">+ Add Skill</button>
+          </div>
+          <div id="skills-workers" class="skills-panel">
+            <div class="worker-role-select">
+              <label for="worker-role">Select Role:</label>
+              <select id="worker-role"></select>
+            </div>
+            <div class="skills-list" id="worker-role-skills"></div>
+            <button id="add-worker-role-skill" class="add-skill">+ Add Skill</button>
           </div>
         </div>
       </section>

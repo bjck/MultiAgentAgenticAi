@@ -39,3 +39,19 @@ multiagent:
     - qa
     - writing
     - general
+  # Agent skills configuration - define specialized skills per agent type
+  skills:
+    # Skills for the orchestrator agent (planning phase)
+    orchestrator: []
+    # Skills for the synthesis agent (combining worker outputs)
+    synthesis: []
+    # Default skills applied to all worker agents
+    worker-defaults: []
+    # Role-specific skills for worker agents
+    workers:
+      research: []
+      design: []
+      engineering: []
+      qa: []
+      writing: []
+      general: []
