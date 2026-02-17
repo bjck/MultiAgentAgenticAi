@@ -85,6 +85,10 @@ public class OrchestratorService {
         return new OrchestrationResult(plan, results, finalAnswer);
     }
 
+    public OrchestratorPlan plan(String userMessage) {
+        return requestPlan(userMessage);
+    }
+
     private OrchestratorPlan requestPlan(String userMessage) {
         try {
             String systemPrompt = orchestratorSystemPrompt();
