@@ -2,6 +2,7 @@ package com.bko.api;
 
 import com.bko.orchestration.OrchestratorService;
 import com.bko.orchestration.model.OrchestrationResult;
+import com.bko.orchestration.model.OrchestratorPlan;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -22,5 +23,11 @@ public class ChatController {
     public ChatResponse chat(@Valid @RequestBody ChatRequest request) {
         OrchestrationResult result = orchestratorService.orchestrate(request.message());
         return ChatResponse.from(result);
+    }
+
+    @PostMapping("/plan")
+    public PlanResponse plan(@Valid @RequestBody ChatRequest request) {
+        OrchestratorPlan plan = orchestratorService.plan(request.message());
+        return PlanResponse.from(plan);
     }
 }
