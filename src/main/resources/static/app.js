@@ -18,6 +18,12 @@ const editor = document.getElementById("editor");
 const editorPath = document.getElementById("editor-path");
 const saveFile = document.getElementById("save-file");
 
+const toolButtons = document.querySelectorAll(".floating-tools .tool-button");
+const sidePanels = document.querySelectorAll(".side-panel");
+const drawer = document.getElementById("drawer");
+const drawerOverlay = document.getElementById("drawer-overlay");
+const drawerClose = document.getElementById("drawer-close");
+
 // Skills panel elements
 const refreshSkills = document.getElementById("refresh-skills");
 const workerRoleSelect = document.getElementById("worker-role");
@@ -126,6 +132,32 @@ const escapeHtml = (text) => {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+};
+
+const setActiveSidePanel = (target) => {
+  toolButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.side === target);
+  });
+  sidePanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `side-${target}`);
+  });
+};
+
+const openDrawer = (target) => {
+  setActiveSidePanel(target);
+  drawer.classList.add("open");
+  drawerOverlay.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  drawerOverlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("drawer-open");
+};
+
+const closeDrawer = () => {
+  drawer.classList.remove("open");
+  drawerOverlay.classList.remove("open");
+  drawer.setAttribute("aria-hidden", "true");
+  drawerOverlay.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("drawer-open");
 };
 
 const sendChat = async (message) => {
@@ -591,6 +623,20 @@ skillsTabs.forEach((tab) => {
   });
 });
 
+toolButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    openDrawer(button.dataset.side);
+  });
+});
+
+drawerClose.addEventListener("click", closeDrawer);
+drawerOverlay.addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeDrawer();
+  }
+});
+
 // Worker role selection
 workerRoleSelect.addEventListener("change", (e) => {
   currentWorkerRole = e.target.value;
@@ -620,4 +666,6 @@ window.addEventListener("load", () => {
   loadFiles();
   loadSkills();
   setConnection("Workspace loaded");
+  const defaultSide = document.querySelector(".floating-tools .tool-button")?.dataset.side || "skills";
+  setActiveSidePanel(defaultSide);
 });
