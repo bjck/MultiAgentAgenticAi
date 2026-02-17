@@ -958,3 +958,84 @@ button.tool-button.active:hover {
     align-items: flex-start;
   }
 }
+
+/* Agent Feedback Styling */
+.agent-feedback {
+  font-size: 0.8em;
+  color: var(--muted);
+  background-color: #e6f7f5; /* Light accent background */
+  padding: 4px 8px;
+  border-radius: 6px;
+  margin-left: 10px; /* Space from task-id */
+  font-weight: 500;
+}
+
+.agent-feedback .agent-name {
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
+/* Dark mode styles */
+[data-theme='dark'] {
+  --bg: #1a202c;
+  --bg-accent: #2d3748;
+  --panel: #2d3748;
+  --ink: #e2e8f0;
+  --muted: #a0aec0;
+  --accent: #63b3ed;
+  --accent-strong: #4299e1;
+  --border: #4a5568;
+  --shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+  --side-bg: #2d3748;
+  --side-ink: #e2e8f0;
+}
+
+[data-theme='dark'] body {
+  background: radial-gradient(circle at top left, var(--bg-accent), var(--bg));
+}
+
+[data-theme='dark'] .hero {
+  background: linear-gradient(140deg, #2d3748, #4a5568);
+  border: 1px solid var(--border);
+}
+
+[data-theme='dark'] textarea,
+[data-theme='dark'] input[type="text"],
+[data-theme='dark'] .file-list,
+[data-theme='dark'] .skill-card,
+[data-theme='dark'] .worker-role-select select,
+[data-theme='dark'] .add-skill:hover {
+  background: #2d3748;
+  color: var(--ink);
+  border-color: var(--border);
+}
+
+[data-theme='dark'] .card {
+  background: #2d3748;
+}
+
+[data-theme='dark'] .card.fold summary::before {
+  background: #4a5568;
+  color: var(--accent);
+}
+
+[data-theme='dark'] .markdown-content code,
+[data-theme='dark'] .plan-objective,
+[data-theme='dark'] .plan-task-expected {
+  background: #4a5568;
+  color: var(--ink);
+}
+
+[data-theme='dark'] .markdown-content blockquote {
+  background: #4a5568;
+  color: var(--muted);
+}
+
+[data-theme='dark'] .markdown-content th {
+  background: #4a5568;
+}
+
+[data-theme='dark'] .agent-feedback {
+  background-color: #3b506b;
+  color: var(--muted);
+}

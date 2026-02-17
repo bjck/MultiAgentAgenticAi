@@ -90,8 +90,15 @@ const renderWorkers = (results) => {
     const taskId = document.createElement("span");
     taskId.classList.add("task-id");
     taskId.textContent = result.taskId || "";
+
+    // NEW: Agent Visual Feedback
+    const agentFeedback = document.createElement("div");
+    agentFeedback.classList.add("agent-feedback");
+    agentFeedback.textContent = `Agent: ${result.role}`; // Display agent role
+
     heading.appendChild(role);
     heading.appendChild(taskId);
+    heading.appendChild(agentFeedback); // Add agent feedback to the heading
     const body = document.createElement("div");
     body.classList.add("markdown-content");
     body.innerHTML = renderMarkdown(result.output || "");

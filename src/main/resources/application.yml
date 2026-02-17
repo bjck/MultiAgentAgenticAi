@@ -33,6 +33,7 @@ multiagent:
   worker-timeout: 90s
   workspace-root: ${WORKSPACE_ROOT:${user.dir}}
   worker-roles:
+    - analysis
     - research
     - design
     - engineering
@@ -49,6 +50,7 @@ multiagent:
     worker-defaults: []
     # Role-specific skills for worker agents
     workers:
+      analysis: []
       research: []
       design: []
       engineering: []

@@ -13,7 +13,7 @@ public class MultiAgentProperties {
     private int workerConcurrency = 4;
     private Duration workerTimeout = Duration.ofSeconds(90);
     private List<String> workerRoles = new ArrayList<>(
-            List.of("research", "design", "engineering", "qa", "writing", "general"));
+            List.of("analysis", "research", "design", "engineering", "qa", "writing", "general"));
     private String workspaceRoot;
     private AgentSkillsConfig skills = new AgentSkillsConfig();
 
