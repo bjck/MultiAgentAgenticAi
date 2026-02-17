@@ -6,6 +6,7 @@ const workerOutput = document.getElementById("worker-output");
 const finalOutput = document.getElementById("final-output");
 const clearChat = document.getElementById("clear-chat");
 const connectionLabel = document.getElementById("connection-label");
+const previewPlanBtn = document.getElementById("preview-plan");
 
 const fileList = document.getElementById("file-list");
 const pathDisplay = document.getElementById("path-display");
@@ -27,6 +28,8 @@ let currentPath = "";
 let selectedFile = "";
 let skillsData = null;
 let currentWorkerRole = "";
+let currentPlan = null;
+let currentMessage = "";
 
 const setStatus = (message) => {
   chatStatus.textContent = message;
@@ -72,17 +75,20 @@ const renderWorkers = (results) => {
   workerOutput.innerHTML = "";
   results.forEach((result) => {
     const card = document.createElement("div");
-    card.classList.add("task");
+    card.classList.add("worker-card");
     const heading = document.createElement("div");
+    heading.classList.add("worker-heading");
     const role = document.createElement("span");
     role.classList.add("role");
     role.textContent = result.role || "worker";
     const taskId = document.createElement("span");
+    taskId.classList.add("task-id");
     taskId.textContent = result.taskId || "";
     heading.appendChild(role);
     heading.appendChild(taskId);
     const body = document.createElement("div");
-    body.textContent = result.output || "";
+    body.classList.add("markdown-content");
+    body.innerHTML = renderMarkdown(result.output || "");
     card.appendChild(heading);
     card.appendChild(body);
     workerOutput.appendChild(card);
@@ -96,7 +102,30 @@ const renderFinal = (finalAnswer) => {
     return;
   }
   finalOutput.classList.remove("empty");
-  finalOutput.textContent = finalAnswer;
+  finalOutput.classList.add("markdown-content");
+  finalOutput.innerHTML = renderMarkdown(finalAnswer);
+};
+
+// Markdown rendering helper
+const renderMarkdown = (text) => {
+  if (!text) return "";
+  try {
+    // Configure marked for safe rendering
+    marked.setOptions({
+      breaks: true,
+      gfm: true,
+    });
+    return marked.parse(text);
+  } catch (e) {
+    console.error("Markdown parsing error:", e);
+    return escapeHtml(text);
+  }
+};
+
+const escapeHtml = (text) => {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
 };
 
 const sendChat = async (message) => {
@@ -118,9 +147,96 @@ const sendChat = async (message) => {
     setStatus("Agents complete.");
   } catch (error) {
     setStatus("Failed to run agents.");
+    finalOutput.classList.remove("markdown-content");
     finalOutput.textContent = error.message;
     finalOutput.classList.remove("empty");
   }
+};
+
+// Plan preview functionality
+const previewPlan = async (message) => {
+  setStatus("Generating plan preview...");
+  try {
+    const response = await fetch("/api/chat/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!response.ok) {
+      throw new Error(`Plan preview failed with ${response.status}`);
+    }
+    const data = await response.json();
+    currentPlan = data;
+    currentMessage = message;
+    showPlanPreviewModal(data);
+    setStatus("Plan ready for review.");
+  } catch (error) {
+    setStatus("Failed to generate plan.");
+    console.error(error);
+  }
+};
+
+const showPlanPreviewModal = (plan) => {
+  const overlay = document.createElement("div");
+  overlay.classList.add("modal-overlay");
+
+  let tasksHtml = "";
+  if (plan.tasks && plan.tasks.length > 0) {
+    tasksHtml = plan.tasks.map((task, index) => `
+      <div class="plan-task">
+        <div class="plan-task-header">
+          <span class="task-number">#${index + 1}</span>
+          <span class="role">${task.role || "general"}</span>
+          <span class="task-id">${task.id || ""}</span>
+        </div>
+        <div class="plan-task-description">${escapeHtml(task.description || "")}</div>
+        <div class="plan-task-expected">
+          <strong>Expected output:</strong> ${escapeHtml(task.expectedOutput || "")}
+        </div>
+      </div>
+    `).join("");
+  } else {
+    tasksHtml = '<div class="empty">No tasks in plan.</div>';
+  }
+
+  overlay.innerHTML = `
+    <div class="modal plan-preview-modal">
+      <h3>Plan Preview</h3>
+      <div class="plan-objective">
+        <strong>Objective:</strong> ${escapeHtml(plan.objective || "No objective specified")}
+      </div>
+      <div class="plan-tasks-header">
+        <strong>Tasks (${plan.tasks?.length || 0})</strong>
+      </div>
+      <div class="plan-tasks-list">
+        ${tasksHtml}
+      </div>
+      <div class="modal-actions">
+        <button class="cancel">Cancel</button>
+        <button class="execute">Execute Plan</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector(".cancel").addEventListener("click", () => {
+    overlay.remove();
+    setStatus("Plan cancelled.");
+  });
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      overlay.remove();
+      setStatus("Plan cancelled.");
+    }
+  });
+
+  overlay.querySelector(".execute").addEventListener("click", () => {
+    overlay.remove();
+    renderPlan({ objective: plan.objective, tasks: plan.tasks });
+    sendChat(currentMessage);
+  });
 };
 
 chatForm.addEventListener("submit", (event) => {
@@ -131,6 +247,15 @@ chatForm.addEventListener("submit", (event) => {
     return;
   }
   sendChat(message);
+});
+
+previewPlanBtn.addEventListener("click", () => {
+  const message = chatInput.value.trim();
+  if (!message) {
+    setStatus("Enter a message first.");
+    return;
+  }
+  previewPlan(message);
 });
 
 clearChat.addEventListener("click", () => {
