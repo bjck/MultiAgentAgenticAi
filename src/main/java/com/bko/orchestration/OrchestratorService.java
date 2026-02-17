@@ -1,5 +1,6 @@
 package com.bko.orchestration;
 
+import com.bko.config.AgentSkill;
 import com.bko.config.MultiAgentProperties;
 import com.bko.orchestration.model.OrchestrationResult;
 import com.bko.orchestration.model.OrchestratorPlan;
@@ -174,30 +175,53 @@ public class OrchestratorService {
     }
 
     private String orchestratorSystemPrompt() {
-        return """
+        String basePrompt = """
                 You are the Orchestrator agent. Break the user's request into up to %d parallel tasks.
                 Assign each task a role from: %s.
                 Keep tasks independent and specific. Each task should be actionable by a single worker.
                 You may use MCP filesystem tools to inspect the workspace when needed. Do not modify files unless requested.
                 Return only JSON that matches the requested schema.
                 """.formatted(properties.getMaxTasks(), String.join(", ", properties.getWorkerRoles()));
+        return appendSkillsToPrompt(basePrompt, properties.getSkills().getOrchestrator());
     }
 
     private String workerSystemPrompt(String role) {
-        return """
+        String basePrompt = """
                 You are a %s worker agent.
                 Focus only on the assigned task. Be concise and practical.
                 You may use MCP filesystem tools to read or list files in the workspace. Only write files when explicitly instructed.
                 If assumptions are required, list them explicitly.
                 """.formatted(role);
+        List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
+        return appendSkillsToPrompt(basePrompt, skills);
     }
 
     private String synthesisSystemPrompt() {
-        return """
+        String basePrompt = """
                 You are the synthesis agent. Combine worker outputs into a single, coherent response.
                 Resolve conflicts, remove duplication, and answer the user's request directly.
                 If MCP tool output was used, summarize relevant file changes accurately.
                 """;
+        return appendSkillsToPrompt(basePrompt, properties.getSkills().getSynthesis());
+    }
+
+    private String appendSkillsToPrompt(String basePrompt, List<AgentSkill> skills) {
+        if (skills == null || skills.isEmpty()) {
+            return basePrompt;
+        }
+        StringBuilder sb = new StringBuilder(basePrompt);
+        sb.append("\n\nYou have the following skills:\n");
+        for (AgentSkill skill : skills) {
+            sb.append("\n### ").append(skill.getName());
+            if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
+                sb.append("\n").append(skill.getDescription());
+            }
+            if (skill.getInstructions() != null && !skill.getInstructions().isBlank()) {
+                sb.append("\nInstructions: ").append(skill.getInstructions());
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
     }
 
     private String normalizeRole(String role, List<String> allowedRoles) {
