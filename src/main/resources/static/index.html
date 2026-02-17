@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MultiAgent Builder</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -30,7 +31,8 @@
           <label for="chat-input">Describe the feature you want to build</label>
           <textarea id="chat-input" placeholder="Build a login flow with email verification and update the docs."></textarea>
           <div class="chat-actions">
-            <button type="submit" id="send-chat">Run agents</button>
+            <button type="button" id="preview-plan">Preview Plan</button>
+            <button type="submit" id="send-chat">Run Agents</button>
             <span id="chat-status">Awaiting input.</span>
           </div>
         </form>
