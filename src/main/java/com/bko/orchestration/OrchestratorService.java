@@ -1,17 +1,19 @@
 package com.bko.orchestration;
 
-import com.bko.config.AgentSkill;
+import static com.bko.orchestration.OrchestrationConstants.*;
 import com.bko.config.MultiAgentProperties;
 import com.bko.orchestration.model.OrchestrationResult;
 import com.bko.orchestration.model.OrchestratorPlan;
 import com.bko.orchestration.model.RoleSelection;
 import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.WorkerResult;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.bko.orchestration.service.FileEditDetectionService;
+import com.bko.orchestration.service.JsonProcessingService;
+import com.bko.orchestration.service.OrchestrationContextService;
+import com.bko.orchestration.service.OrchestrationPromptService;
 import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.lang.Nullable;
@@ -24,7 +26,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,109 +34,39 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class OrchestratorService {
-
-    private static final Logger log = LoggerFactory.getLogger(OrchestratorService.class);
-
-    private static final String ANALYSIS_ROLE = "analysis";
-    private static final String DESIGN_ROLE = "design";
-    private static final String ENGINEERING_ROLE = "engineering";
-    private static final Set<String> ADVISORY_ROLES = Set.of(ANALYSIS_ROLE, DESIGN_ROLE);
-    private static final int MAX_EXECUTION_ITERATIONS = 3;
-
-    private static final String ORCHESTRATOR_USER_TEMPLATE = """
-            User request:
-            {input}
-
-            Context:
-            {context}
-            """;
-
-    private static final String ROLE_SELECTION_USER_TEMPLATE = """
-            User request:
-            {input}
-
-            Context:
-            {context}
-
-            Available roles and skills:
-            {roles}
-            """;
-
-    private static final String EXECUTION_REVIEW_USER_TEMPLATE = """
-            User request:
-            {input}
-
-            Context:
-            {context}
-
-            Current plan:
-            {plan}
-
-            Worker outputs so far:
-            {results}
-            """;
-
-    private static final String WORKER_USER_TEMPLATE = """
-            User request:
-            {input}
-
-            Context:
-            {context}
-
-            Assigned task:
-            {task}
-
-            Expected output:
-            {expectedOutput}
-            """;
-
-    private static final String SYNTHESIS_USER_TEMPLATE = """
-            User request:
-            {input}
-
-            Plan:
-            {plan}
-
-            Worker outputs:
-            {results}
-            """;
 
     private final ChatClient chatClient;
     private final MultiAgentProperties properties;
-    private final ObjectMapper objectMapper;
-    private final ExecutorService executor;
+    private final ExecutorService workerExecutor;
     private final ToolCallbackProvider toolCallbackProvider;
     private final AtomicLong llmRequestCount = new AtomicLong();
     private final AtomicLong planResponseCount = new AtomicLong();
     private final AtomicLong taskReceivedCount = new AtomicLong();
     private final AtomicLong taskExecutedCount = new AtomicLong();
 
-    public OrchestratorService(ChatClient.Builder builder,
-                               MultiAgentProperties properties,
-                               ObjectMapper objectMapper,
-                               @Nullable ToolCallbackProvider toolCallbackProvider) {
-        this.chatClient = builder.build();
-        this.properties = properties;
-        this.objectMapper = objectMapper;
-        this.executor = Executors.newFixedThreadPool(properties.getWorkerConcurrency());
-        this.toolCallbackProvider = toolCallbackProvider;
-    }
+    // Injected Services
+    private final FileEditDetectionService fileEditDetectionService;
+    private final OrchestrationPromptService orchestrationPromptService;
+    private final OrchestrationContextService orchestrationContextService;
+    private final JsonProcessingService jsonProcessingService;
 
     @PreDestroy
     public void shutdown() {
-        executor.shutdown();
+        workerExecutor.shutdown();
     }
 
     public OrchestrationResult orchestrate(String userMessage) {
-        boolean requiresEdits = requiresFileEdits(userMessage);
+        boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
         List<String> initialRoles = selectRoles(userMessage, requiresEdits, null);
         List<TaskSpec> advisoryTasks = buildAdvisoryTasks(userMessage, initialRoles);
         if (!advisoryTasks.isEmpty()) {
             log.info("Advisory tasks scheduled: {}.", advisoryTasks.size());
         }
         List<WorkerResult> advisoryResults = runAdvisoryTasks(userMessage, advisoryTasks, requiresEdits);
-        String advisoryContext = buildAdvisoryContext(advisoryResults);
+        String advisoryContext = orchestrationContextService.buildAdvisoryContext(advisoryResults);
 
         List<String> executionRoles = selectRoles(userMessage, requiresEdits, advisoryContext);
         OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, executionRoles, advisoryContext);
@@ -174,7 +105,7 @@ public class OrchestratorService {
     }
 
     public OrchestratorPlan plan(String userMessage) {
-        boolean requiresEdits = requiresFileEdits(userMessage);
+        boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
         List<String> selectedRoles = selectRoles(userMessage, requiresEdits, null);
         OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, selectedRoles, null);
         return sanitizePlan(rawPlan, userMessage, requiresEdits, selectedRoles, false, false);
@@ -183,9 +114,10 @@ public class OrchestratorService {
     private OrchestratorPlan requestPlan(String userMessage, boolean requiresEdits,
                                          List<String> allowedRoles, @Nullable String context) {
         try {
-            String systemPrompt = orchestratorSystemPrompt(requiresEdits, allowedRoles);
-            String normalizedContext = defaultContext(context);
-            logLlmRequest("plan", null);
+            String registry = orchestrationContextService.buildRoleRegistry(allowedRoles);
+            String systemPrompt = orchestrationPromptService.orchestratorSystemPrompt(requiresEdits, allowedRoles, registry);
+            String normalizedContext = orchestrationContextService.defaultContext(context);
+            logLlmRequest(PURPOSE_PLAN, null);
             String response = applyTools(chatClient.prompt())
                     .system(systemPrompt)
                     .user(user -> user.text(ORCHESTRATOR_USER_TEMPLATE)
@@ -193,10 +125,10 @@ public class OrchestratorService {
                             .param("context", normalizedContext))
                     .call()
                     .content();
-            OrchestratorPlan plan = parseJsonResponse("plan", response, OrchestratorPlan.class);
+            OrchestratorPlan plan = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN, response, OrchestratorPlan.class);
             if (plan == null) {
-                String retryPrompt = systemPrompt + "\nYour last response was invalid JSON. Return only valid JSON.";
-                logLlmRequest("plan-retry", null);
+                String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
+                logLlmRequest(PURPOSE_PLAN_RETRY, null);
                 String retryResponse = applyTools(chatClient.prompt())
                         .system(retryPrompt)
                         .user(user -> user.text(ORCHESTRATOR_USER_TEMPLATE)
@@ -204,9 +136,9 @@ public class OrchestratorService {
                                 .param("context", normalizedContext))
                         .call()
                         .content();
-                plan = parseJsonResponse("plan-retry", retryResponse, OrchestratorPlan.class);
+                plan = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_RETRY, retryResponse, OrchestratorPlan.class);
             }
-            logPlanResponse("plan", plan);
+            logPlanResponse(PURPOSE_PLAN, plan);
             return plan;
         } catch (Exception ex) {
             return null;
@@ -217,11 +149,11 @@ public class OrchestratorService {
                                                      List<String> allowedRoles, @Nullable String context,
                                                      OrchestratorPlan plan, List<WorkerResult> results) {
         try {
-            String systemPrompt = executionReviewPrompt(requiresEdits, allowedRoles);
-            String normalizedContext = defaultContext(context);
-            String planJson = toJson(plan);
-            String resultsJson = toJson(results);
-            logLlmRequest("plan-review", null);
+            String systemPrompt = orchestrationPromptService.executionReviewPrompt(requiresEdits, allowedRoles);
+            String normalizedContext = orchestrationContextService.defaultContext(context);
+            String planJson = jsonProcessingService.toJson(plan);
+            String resultsJson = jsonProcessingService.toJson(results);
+            logLlmRequest(PURPOSE_PLAN_REVIEW, null);
             String response = applyTools(chatClient.prompt())
                     .system(systemPrompt)
                     .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
@@ -231,10 +163,10 @@ public class OrchestratorService {
                             .param("results", resultsJson))
                     .call()
                     .content();
-            OrchestratorPlan continuation = parseJsonResponse("plan-review", response, OrchestratorPlan.class);
+            OrchestratorPlan continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW, response, OrchestratorPlan.class);
             if (continuation == null) {
-                String retryPrompt = systemPrompt + "\nYour last response was invalid JSON. Return only valid JSON.";
-                logLlmRequest("plan-review-retry", null);
+                String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
+                logLlmRequest(PURPOSE_PLAN_REVIEW_RETRY, null);
                 String retryResponse = applyTools(chatClient.prompt())
                         .system(retryPrompt)
                         .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
@@ -244,9 +176,9 @@ public class OrchestratorService {
                                 .param("results", resultsJson))
                         .call()
                         .content();
-                continuation = parseJsonResponse("plan-review-retry", retryResponse, OrchestratorPlan.class);
+                continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW_RETRY, retryResponse, OrchestratorPlan.class);
             }
-            logPlanResponse("plan-review", continuation);
+            logPlanResponse(PURPOSE_PLAN_REVIEW, continuation);
             return continuation;
         } catch (Exception ex) {
             return null;
@@ -255,31 +187,31 @@ public class OrchestratorService {
 
     private List<String> selectRoles(String userMessage, boolean requiresEdits, @Nullable String context) {
         List<String> availableRoles = normalizedRoles();
-        String registry = buildRoleRegistry(availableRoles);
+        String registry = orchestrationContextService.buildRoleRegistry(availableRoles);
         try {
-            logLlmRequest("role-selection", null);
+            logLlmRequest(PURPOSE_ROLE_SELECTION, null);
             String response = applyTools(chatClient.prompt())
-                    .system(roleSelectionPrompt(requiresEdits, availableRoles))
+                    .system(orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles))
                     .user(user -> user.text(ROLE_SELECTION_USER_TEMPLATE)
                             .param("input", userMessage)
-                            .param("context", defaultContext(context))
+                            .param("context", orchestrationContextService.defaultContext(context))
                             .param("roles", registry))
                     .call()
                     .content();
-            RoleSelection selection = parseJsonResponse("role-selection", response, RoleSelection.class);
+            RoleSelection selection = jsonProcessingService.parseJsonResponse(PURPOSE_ROLE_SELECTION, response, RoleSelection.class);
             if (selection == null) {
-                String retryPrompt = roleSelectionPrompt(requiresEdits, availableRoles)
-                        + "\nYour last response was invalid JSON. Return only valid JSON.";
-                logLlmRequest("role-selection-retry", null);
+                String retryPrompt = orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles)
+                        + INVALID_JSON_RETRY_PROMPT;
+                logLlmRequest(PURPOSE_ROLE_SELECTION_RETRY, null);
                 String retryResponse = applyTools(chatClient.prompt())
                         .system(retryPrompt)
                         .user(user -> user.text(ROLE_SELECTION_USER_TEMPLATE)
                                 .param("input", userMessage)
-                                .param("context", defaultContext(context))
+                                .param("context", orchestrationContextService.defaultContext(context))
                                 .param("roles", registry))
                         .call()
                         .content();
-                selection = parseJsonResponse("role-selection-retry", retryResponse, RoleSelection.class);
+                selection = jsonProcessingService.parseJsonResponse(PURPOSE_ROLE_SELECTION_RETRY, retryResponse, RoleSelection.class);
             }
             List<String> roles = sanitizeSelectedRoles(selection != null ? selection.roles() : null, requiresEdits);
             log.info("Selected roles: {}.", String.join(", ", roles));
@@ -293,15 +225,15 @@ public class OrchestratorService {
 
     private List<TaskSpec> buildAdvisoryTasks(String userMessage, List<String> selectedRoles) {
         List<TaskSpec> tasks = new ArrayList<>();
-        if (selectedRoles.contains(ANALYSIS_ROLE)) {
-            tasks.add(new TaskSpec("analysis-1", ANALYSIS_ROLE,
-                    "Analyze the user request. Identify requirements, constraints, risks, and edge cases.",
-                    "Provide structured analysis and open questions if any. Do not modify files."));
+        if (selectedRoles.contains(ROLE_ANALYSIS)) {
+            tasks.add(new TaskSpec(TASK_ID_ANALYSIS, ROLE_ANALYSIS,
+                    ANALYSIS_TASK_DESCRIPTION,
+                    ANALYSIS_TASK_EXPECTED_OUTPUT));
         }
-        if (selectedRoles.contains(DESIGN_ROLE)) {
-            tasks.add(new TaskSpec("design-1", DESIGN_ROLE,
-                    "Propose a design/approach for the request, including components, APIs, data flow, and steps.",
-                    "Provide a clear design and implementation guidance. Do not modify files."));
+        if (selectedRoles.contains(ROLE_DESIGN)) {
+            tasks.add(new TaskSpec(TASK_ID_DESIGN, ROLE_DESIGN,
+                    DESIGN_TASK_DESCRIPTION,
+                    DESIGN_TASK_EXPECTED_OUTPUT));
         }
         return tasks;
     }
@@ -314,18 +246,18 @@ public class OrchestratorService {
         log.info("Executing {} advisory tasks. Total tasks executed so far={}.", advisoryTasks.size(), totalExecuted);
         List<WorkerResult> results = new ArrayList<>();
         TaskSpec analysisTask = advisoryTasks.stream()
-                .filter(task -> ANALYSIS_ROLE.equals(task.role()))
+                .filter(task -> ROLE_ANALYSIS.equals(task.role()))
                 .findFirst()
                 .orElse(null);
         if (analysisTask != null) {
             results.add(runWorker(userMessage, analysisTask, requiresEdits, null));
         }
         TaskSpec designTask = advisoryTasks.stream()
-                .filter(task -> DESIGN_ROLE.equals(task.role()))
+                .filter(task -> ROLE_DESIGN.equals(task.role()))
                 .findFirst()
                 .orElse(null);
         if (designTask != null) {
-            String analysisContext = buildResultsContext(results);
+            String analysisContext = orchestrationContextService.buildResultsContext(results);
             results.add(runWorker(userMessage, designTask, requiresEdits, analysisContext));
         }
         return results;
@@ -341,31 +273,31 @@ public class OrchestratorService {
         Duration timeout = properties.getWorkerTimeout();
         if (requiresEdits) {
             List<TaskSpec> engineeringTasks = tasks.stream()
-                    .filter(task -> ENGINEERING_ROLE.equals(task.role()))
+                    .filter(task -> ROLE_ENGINEERING.equals(task.role()))
                     .toList();
             List<TaskSpec> otherTasks = tasks.stream()
-                    .filter(task -> !ENGINEERING_ROLE.equals(task.role()))
+                    .filter(task -> !ROLE_ENGINEERING.equals(task.role()))
                     .toList();
             List<WorkerResult> results = new ArrayList<>(tasks.size());
-            String engineeringContext = mergeContexts(advisoryContext,
-                    buildResultsContext(filterResultsByRole(priorResults, Set.of(ENGINEERING_ROLE))));
+            String engineeringContext = orchestrationContextService.mergeContexts(advisoryContext,
+                    orchestrationContextService.buildResultsContext(orchestrationContextService.filterResultsByRole(priorResults, Set.of(ROLE_ENGINEERING))));
             for (TaskSpec task : engineeringTasks) {
                 String taskContext = engineeringContext;
                 WorkerResult result = CompletableFuture
-                        .supplyAsync(() -> runWorker(userMessage, task, true, taskContext), executor)
+                        .supplyAsync(() -> runWorker(userMessage, task, true, taskContext), workerExecutor)
                         .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
                         .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
-                                "Worker failed: " + ex.getMessage()))
+                                WORKER_FAILED_MESSAGE + ex.getMessage()))
                         .join();
                 results.add(result);
-                engineeringContext = mergeContexts(engineeringContext, buildResultsContext(List.of(result)));
+                engineeringContext = orchestrationContextService.mergeContexts(engineeringContext, orchestrationContextService.buildResultsContext(List.of(result)));
             }
             if (otherTasks.isEmpty()) {
                 return results;
             }
             String remainingContext = engineeringContext;
             List<CompletableFuture<WorkerResult>> futures = otherTasks.stream()
-                    .map(task -> CompletableFuture.supplyAsync(() -> runWorker(userMessage, task, true, remainingContext), executor)
+                    .map(task -> CompletableFuture.supplyAsync(() -> runWorker(userMessage, task, true, remainingContext), workerExecutor)
                             .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
                             .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
                                     "Worker failed: " + ex.getMessage())))
@@ -374,9 +306,9 @@ public class OrchestratorService {
             return results;
         }
 
-        String context = mergeContexts(advisoryContext, buildResultsContext(priorResults));
+        String context = orchestrationContextService.mergeContexts(advisoryContext, orchestrationContextService.buildResultsContext(priorResults));
         List<CompletableFuture<WorkerResult>> futures = tasks.stream()
-                .map(task -> CompletableFuture.supplyAsync(() -> runWorker(userMessage, task, false, context), executor)
+                .map(task -> CompletableFuture.supplyAsync(() -> runWorker(userMessage, task, false, context), workerExecutor)
                         .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
                         .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
                                 "Worker failed: " + ex.getMessage())))
@@ -387,13 +319,13 @@ public class OrchestratorService {
     }
 
     private WorkerResult runWorker(String userMessage, TaskSpec task, boolean requiresEdits, @Nullable String context) {
-        String systemPrompt = workerSystemPrompt(task.role(), requiresEdits);
-        logLlmRequest("worker-task", task.role());
+        String systemPrompt = orchestrationPromptService.workerSystemPrompt(task.role(), requiresEdits);
+        logLlmRequest(PURPOSE_WORKER_TASK, task.role());
         String output = applyTools(chatClient.prompt())
                 .system(systemPrompt)
                 .user(user -> user.text(WORKER_USER_TEMPLATE)
                         .param("input", userMessage)
-                        .param("context", defaultContext(context))
+                        .param("context", orchestrationContextService.defaultContext(context))
                         .param("task", task.description())
                         .param("expectedOutput", task.expectedOutput()))
                 .call()
@@ -405,11 +337,11 @@ public class OrchestratorService {
         if (results.size() == 1 && !ADVISORY_ROLES.contains(results.getFirst().role())) {
             return results.getFirst().output();
         }
-        String planJson = toJson(plan);
-        String resultsJson = toJson(results);
-        logLlmRequest("synthesis", null);
+        String planJson = jsonProcessingService.toJson(plan);
+        String resultsJson = jsonProcessingService.toJson(results);
+        logLlmRequest(PURPOSE_SYTHESIS, null);
         return applyTools(chatClient.prompt())
-                .system(synthesisSystemPrompt())
+                .system(orchestrationPromptService.synthesisSystemPrompt())
                 .user(user -> user.text(SYNTHESIS_USER_TEMPLATE)
                         .param("input", userMessage)
                         .param("plan", planJson)
@@ -435,20 +367,20 @@ public class OrchestratorService {
             if (excludeAdvisory && ADVISORY_ROLES.contains(role)) {
                 return;
             }
-            String id = StringUtils.hasText(task.id()) ? task.id() : "task-" + (index + 1);
+            String id = StringUtils.hasText(task.id()) ? task.id() : TASK_PREFIX + (index + 1);
             String description = StringUtils.hasText(task.description()) ? task.description() : userMessage;
             String expectedOutput = StringUtils.hasText(task.expectedOutput())
                     ? task.expectedOutput()
-                    : "Provide concise, actionable output.";
+                    : DEFAULT_EXPECTED_OUTPUT;
             if (requiresEdits) {
-                boolean canEdit = ENGINEERING_ROLE.equals(role);
-                expectedOutput = appendFileEditInstruction(expectedOutput, canEdit);
+                boolean canEdit = ROLE_ENGINEERING.equals(role);
+                expectedOutput = fileEditDetectionService.appendFileEditInstruction(expectedOutput, canEdit);
             }
             sanitized.add(new TaskSpec(id, role, description, expectedOutput));
         });
-        if (requiresEdits && sanitized.stream().noneMatch(task -> ENGINEERING_ROLE.equals(task.role()))) {
-            sanitized.add(new TaskSpec("task-impl", ENGINEERING_ROLE, userMessage,
-                    appendFileEditInstruction("Implement the requested changes.", true)));
+        if (requiresEdits && sanitized.stream().noneMatch(task -> ROLE_ENGINEERING.equals(task.role()))) {
+            sanitized.add(new TaskSpec(TASK_ID_IMPLEMENTATION, ROLE_ENGINEERING, userMessage,
+                    fileEditDetectionService.appendFileEditInstruction(DEFAULT_IMPLEMENTATION_INSTRUCTION, true)));
         }
         if (sanitized.isEmpty()) {
             return allowEmpty ? new OrchestratorPlan(objective, List.of())
@@ -460,117 +392,14 @@ public class OrchestratorService {
     private OrchestratorPlan defaultPlan(String userMessage, boolean requiresEdits, List<String> allowedRoles) {
         List<String> normalizedRoles = normalizeAllowedRoles(allowedRoles);
         String role = requiresEdits
-                ? (normalizedRoles.contains(ENGINEERING_ROLE) ? ENGINEERING_ROLE : fallbackRole(normalizedRoles))
+                ? (normalizedRoles.contains(ROLE_ENGINEERING) ? ROLE_ENGINEERING : fallbackRole(normalizedRoles))
                 : fallbackRole(normalizedRoles);
-        String expectedOutput = "Provide a complete response to the user request.";
+        String expectedOutput = DEFAULT_COMPLETE_RESPONSE_INSTRUCTION;
         if (requiresEdits) {
-            expectedOutput = appendFileEditInstruction(expectedOutput, ENGINEERING_ROLE.equals(role));
+            expectedOutput = fileEditDetectionService.appendFileEditInstruction(expectedOutput, ROLE_ENGINEERING.equals(role));
         }
-        TaskSpec fallback = new TaskSpec("task-1", role, userMessage, expectedOutput);
+        TaskSpec fallback = new TaskSpec(TASK_ID_FALLBACK, role, userMessage, expectedOutput);
         return new OrchestratorPlan(userMessage, List.of(fallback));
-    }
-
-    private String roleSelectionPrompt(boolean requiresEdits, List<String> allowedRoles) {
-        String basePrompt = """
-                You are the agent selector. Choose the minimal set of worker roles needed to satisfy the user request.
-                Only choose from: %s.
-                Use the role skill registry to match roles to required skills.
-                Order roles in likely execution order (analysis/design first, engineering later).
-                Return only JSON that matches: {\"roles\": [\"role1\", ...]}.
-                """.formatted(String.join(", ", allowedRoles));
-        if (requiresEdits) {
-            basePrompt += "\nAlways include the engineering role because code changes are required.\n";
-        }
-        return basePrompt;
-    }
-
-    private String orchestratorSystemPrompt(boolean requiresEdits, List<String> allowedRoles) {
-        String registry = buildRoleRegistry(allowedRoles);
-        String basePrompt = """
-                You are the Orchestrator agent. Break the user's request into up to %d parallel tasks.
-                Only assign roles from: %s.
-                Match tasks to the role skill registry below.
-                Analysis and design tasks are advisory and must not modify files.
-                Engineering tasks should apply file edits when required.
-                Keep tasks independent and specific. Each task should be actionable by a single worker.
-                You may use MCP filesystem tools to inspect the workspace when needed.
-                If the user requests code or content changes, ensure at least one task is explicitly responsible for applying file edits via MCP filesystem tools.
-                Make it clear which task should write files and which should not.
-                Return only JSON that matches the requested schema.
-
-                Role skill registry:
-                %s
-                """.formatted(properties.getMaxTasks(), String.join(", ", allowedRoles), registry);
-        if (requiresEdits) {
-            basePrompt = basePrompt + """
-
-                    The user request requires code changes. Ensure the plan includes implementation tasks that will modify files.
-                    """;
-        }
-        return appendSkillsToPrompt(basePrompt, properties.getSkills().getOrchestrator());
-    }
-
-    private String executionReviewPrompt(boolean requiresEdits, List<String> allowedRoles) {
-        String basePrompt = """
-                You are the execution reviewer. Decide if additional tasks are required to fully satisfy the user request.
-                Only assign roles from: %s.
-                Do NOT include analysis or design tasks; those are already complete.
-                If the work is complete, return an empty tasks array.
-                Return only JSON that matches the requested schema.
-                """.formatted(String.join(", ", allowedRoles));
-        if (requiresEdits) {
-            basePrompt += "\nIf edits are still required, ensure engineering tasks perform them.\n";
-        }
-        return basePrompt;
-    }
-
-    private String workerSystemPrompt(String role, boolean requiresEdits) {
-        String basePrompt = """
-                You are a %s worker agent.
-                Focus only on the assigned task. Be concise and practical.
-                You must follow the expected output for this task.
-                You may use MCP filesystem tools to read or list files in the workspace.
-                When the task requires code changes, you MUST use MCP filesystem tools to read and write files to apply the changes.
-                If the task does not explicitly instruct file edits, do not write files.
-                Only the engineering role should apply file edits.
-                If assumptions are required, list them explicitly.
-                """.formatted(role);
-        if (requiresEdits) {
-            basePrompt = basePrompt + """
-
-                    This request involves code changes. If your task's expected output says to apply changes, you must do so by editing files.
-                    """;
-        }
-        List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
-        return appendSkillsToPrompt(basePrompt, skills);
-    }
-
-    private String synthesisSystemPrompt() {
-        String basePrompt = """
-                You are the synthesis agent. Combine worker outputs into a single, coherent response.
-                Resolve conflicts, remove duplication, and answer the user's request directly.
-                If MCP tool output was used, summarize relevant file changes accurately.
-                """;
-        return appendSkillsToPrompt(basePrompt, properties.getSkills().getSynthesis());
-    }
-
-    private String appendSkillsToPrompt(String basePrompt, List<AgentSkill> skills) {
-        if (skills == null || skills.isEmpty()) {
-            return basePrompt;
-        }
-        StringBuilder sb = new StringBuilder(basePrompt);
-        sb.append("\n\nYou have the following skills:\n");
-        for (AgentSkill skill : skills) {
-            sb.append("\n### ").append(skill.getName());
-            if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
-                sb.append("\n").append(skill.getDescription());
-            }
-            if (skill.getInstructions() != null && !skill.getInstructions().isBlank()) {
-                sb.append("\nInstructions: ").append(skill.getInstructions());
-            }
-            sb.append("\n");
-        }
-        return sb.toString();
     }
 
     private String normalizeRole(String role, List<String> allowedRoles) {
@@ -618,9 +447,9 @@ public class OrchestratorService {
         if (roles.isEmpty()) {
             roles.addAll(available);
         }
-        if (requiresEdits && !roles.contains(ENGINEERING_ROLE)) {
-            if (available.contains(ENGINEERING_ROLE)) {
-                roles.add(ENGINEERING_ROLE);
+        if (requiresEdits && !roles.contains(ROLE_ENGINEERING)) {
+            if (available.contains(ROLE_ENGINEERING)) {
+                roles.add(ROLE_ENGINEERING);
             } else {
                 roles.add(fallbackRole(available));
             }
@@ -629,119 +458,17 @@ public class OrchestratorService {
     }
 
     private String fallbackRole(List<String> allowedRoles) {
-        if (allowedRoles.contains("general")) {
-            return "general";
+        if (allowedRoles.contains(ROLE_GENERAL)) {
+            return ROLE_GENERAL;
         }
-        return allowedRoles.isEmpty() ? "general" : allowedRoles.getFirst();
+        return allowedRoles.isEmpty() ? ROLE_GENERAL : allowedRoles.getFirst();
     }
 
-    private String appendFileEditInstruction(String expectedOutput, boolean canEdit) {
-        String base = StringUtils.hasText(expectedOutput) ? expectedOutput.trim() : "Provide concise, actionable output.";
-        if (canEdit) {
-            return base + """
-
-                    Apply the requested changes directly to repository files using MCP filesystem tools (read and write).
-                    Do not just describe changes. Summarize files modified and any follow-up steps.
-                    """;
+    private ChatClient.ChatClientRequestSpec applyTools(ChatClient.ChatClientRequestSpec prompt) {
+        if (toolCallbackProvider == null) {
+            return prompt;
         }
-        return base + """
-
-                Do not modify files. Provide analysis or suggestions only.
-                """;
-    }
-
-    private String buildRoleRegistry(List<String> roles) {
-        StringBuilder sb = new StringBuilder();
-        for (String role : roles) {
-            List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
-            sb.append("- ").append(role).append("\n");
-            if (skills == null || skills.isEmpty()) {
-                sb.append("  skills: none\n");
-                continue;
-            }
-            for (AgentSkill skill : skills) {
-                sb.append("  - ").append(skill.getName());
-                if (StringUtils.hasText(skill.getDescription())) {
-                    sb.append(": ").append(skill.getDescription().trim());
-                }
-                sb.append("\n");
-            }
-        }
-        return sb.toString();
-    }
-
-    private String buildAdvisoryContext(List<WorkerResult> results) {
-        return buildResultsContext(filterResultsByRole(results, ADVISORY_ROLES));
-    }
-
-    private List<WorkerResult> filterResultsByRole(List<WorkerResult> results, Set<String> roles) {
-        if (results == null || results.isEmpty()) {
-            return List.of();
-        }
-        return results.stream()
-                .filter(result -> roles.contains(result.role()))
-                .toList();
-    }
-
-    private String buildResultsContext(List<WorkerResult> results) {
-        if (results == null || results.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (WorkerResult result : results) {
-            sb.append("[").append(result.role()).append(" - ").append(result.taskId()).append("]\n");
-            sb.append(result.output()).append("\n\n");
-        }
-        return sb.toString().trim();
-    }
-
-    private String mergeContexts(String base, String addition) {
-        if (!StringUtils.hasText(base)) {
-            return StringUtils.hasText(addition) ? addition : "";
-        }
-        if (!StringUtils.hasText(addition)) {
-            return base;
-        }
-        return base + "\n\n" + addition;
-    }
-
-    private String defaultContext(@Nullable String context) {
-        return StringUtils.hasText(context) ? context : "None.";
-    }
-
-    private <T> @Nullable T parseJsonResponse(String label, @Nullable String raw, Class<T> type) {
-        if (!StringUtils.hasText(raw)) {
-            log.warn("Empty response for {}. Unable to parse JSON.", label);
-            return null;
-        }
-        String json = extractJsonObject(raw);
-        try {
-            return objectMapper.readValue(json, type);
-        } catch (Exception ex) {
-            log.warn("Failed to parse {} response as JSON. Snippet: {}", label, truncate(raw, 240));
-            return null;
-        }
-    }
-
-    private String extractJsonObject(String raw) {
-        String trimmed = raw.trim();
-        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-            return trimmed;
-        }
-        int firstBrace = trimmed.indexOf('{');
-        int lastBrace = trimmed.lastIndexOf('}');
-        if (firstBrace >= 0 && lastBrace > firstBrace) {
-            return trimmed.substring(firstBrace, lastBrace + 1);
-        }
-        return trimmed;
-    }
-
-    private String truncate(String value, int maxLength) {
-        String normalized = value.replace("\r", " ").replace("\n", " ").trim();
-        if (normalized.length() <= maxLength) {
-            return normalized;
-        }
-        return normalized.substring(0, maxLength) + "...";
+        return prompt.toolCallbacks(toolCallbackProvider);
     }
 
     private void logLlmRequest(String purpose, @Nullable String role) {
@@ -768,61 +495,5 @@ public class OrchestratorService {
     private void logSummary() {
         log.info("LLM stats: totalRequests={}, totalPlans={}, totalTasksReceived={}, totalTasksExecuted={}.",
                 llmRequestCount.get(), planResponseCount.get(), taskReceivedCount.get(), taskExecutedCount.get());
-    }
-
-    private boolean requiresFileEdits(String userMessage) {
-        if (!StringUtils.hasText(userMessage)) {
-            return false;
-        }
-        String text = userMessage.toLowerCase(Locale.ROOT);
-        if (text.contains("modify your own code")
-                || text.contains("edit the code")
-                || text.contains("change the code")
-                || text.contains("apply the changes")
-                || text.contains("make the following changes")
-                || text.contains("implement this")) {
-            return true;
-        }
-        List<String> editVerbs = List.of(
-                "modify", "change", "update", "fix", "add", "implement", "remove",
-                "delete", "refactor", "rename", "create", "build", "wire", "adjust", "edit", "patch"
-        );
-        List<String> artifacts = List.of(
-                "code", "repo", "repository", "project", "app", "application", "api",
-                "endpoint", "controller", "service", "ui", "frontend", "backend", "css",
-                "html", "javascript", "js", "java", "spring", "config", "yaml", "yml",
-                "file", "files", "tests", "database", "schema", "table"
-        );
-        boolean hasVerb = editVerbs.stream().anyMatch(text::contains);
-        boolean hasArtifact = artifacts.stream().anyMatch(text::contains);
-        if (!hasVerb || !hasArtifact) {
-            return false;
-        }
-        String trimmed = text.trim();
-        boolean startsWithVerb = editVerbs.stream().anyMatch(verb -> trimmed.startsWith(verb + " "));
-        boolean hasDirective = text.contains("please ")
-                || text.contains("can you")
-                || text.contains("could you")
-                || text.contains("i want")
-                || text.contains("i need")
-                || text.contains("i'd like")
-                || text.contains("we need")
-                || text.contains("we want");
-        return startsWithVerb || hasDirective;
-    }
-
-    private ChatClient.ChatClientRequestSpec applyTools(ChatClient.ChatClientRequestSpec prompt) {
-        if (toolCallbackProvider == null) {
-            return prompt;
-        }
-        return prompt.toolCallbacks(toolCallbackProvider);
-    }
-
-    private String toJson(Object value) {
-        try {
-            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
-        } catch (JsonProcessingException ex) {
-            return "\"serialization-failed-" + UUID.randomUUID() + "\"";
-        }
     }
 }
