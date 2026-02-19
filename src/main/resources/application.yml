@@ -58,6 +58,8 @@ multiagent:
   worker-timeout: 90s
   workspace-root: ${WORKSPACE_ROOT:${user.dir}}
   ai-provider: ${AI_PROVIDER:GOOGLE}
+  google:
+    api-key: ${GOOGLE_API_KEY}
   openai:
     api-key: ${OPENAI_API_KEY:none}
     base-url: ${OPENAI_BASE_URL:https://api-cortex.t-netcompany.com/v1}

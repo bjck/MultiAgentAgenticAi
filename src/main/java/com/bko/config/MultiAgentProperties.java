@@ -19,9 +19,20 @@ public class MultiAgentProperties {
     private AgentToolsConfig tools = new AgentToolsConfig();
     private AiProvider aiProvider = AiProvider.GOOGLE;
     private OpenAIConfig openai = new OpenAIConfig();
+    private GoogleConfig google = new GoogleConfig();
 
     public enum AiProvider {
         GOOGLE, OPENAI
+    }
+
+    public static class GoogleConfig {
+        private String apiKey;
+        private String baseUrl = "https://generativelanguage.googleapis.com/v1beta";
+
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
     }
 
     public static class OpenAIConfig {
@@ -51,6 +62,14 @@ public class MultiAgentProperties {
 
     public void setOpenai(OpenAIConfig openai) {
         this.openai = openai;
+    }
+
+    public GoogleConfig getGoogle() {
+        return google;
+    }
+
+    public void setGoogle(GoogleConfig google) {
+        this.google = google;
     }
 
     public int getMaxTasks() {
