@@ -676,9 +676,10 @@ document.getElementById("add-worker-role-skill").addEventListener("click", () =>
 
 refreshSkills.addEventListener("click", loadSkills);
 
-const loadModels = async () => {
+const loadModels = async (provider) => {
   try {
-    const data = await fetchJson("/api/models");
+    const prov = provider || providerSelect.value;
+    const data = await fetchJson(`/api/models?provider=${encodeURIComponent(prov)}`);
     modelSelect.innerHTML = "";
     if (data && data.data) {
       data.data.forEach((m) => {
@@ -694,11 +695,10 @@ const loadModels = async () => {
 };
 
 providerSelect.addEventListener("change", () => {
-  if (providerSelect.value === "OPENAI") {
+  // Show model selector for providers with listable models (OPENAI and GOOGLE)
+  if (providerSelect.value === "OPENAI" || providerSelect.value === "GOOGLE") {
     modelSelectGroup.style.display = "flex";
-    if (modelSelect.options.length === 0) {
-      loadModels();
-    }
+    loadModels(providerSelect.value);
   } else {
     modelSelectGroup.style.display = "none";
   }
@@ -707,9 +707,9 @@ providerSelect.addEventListener("change", () => {
 window.addEventListener("load", () => {
   loadFiles();
   loadSkills();
-  if (providerSelect.value === "OPENAI") {
+  if (providerSelect.value === "OPENAI" || providerSelect.value === "GOOGLE") {
     modelSelectGroup.style.display = "flex";
-    loadModels();
+    loadModels(providerSelect.value);
   }
   setConnection("Workspace loaded");
   const defaultSide = document.querySelector(".floating-tools .tool-button")?.dataset.side || "skills";
