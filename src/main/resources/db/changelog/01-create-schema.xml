@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.24.xsd">
+
+    <!-- Ensure pgcrypto for gen_random_uuid() -->
+    <changeSet id="00-create-pgcrypto" author="junie">
+        <preConditions onFail="MARK_RAN">
+            <dbms type="postgresql"/>
+        </preConditions>
+        <sql>CREATE EXTENSION IF NOT EXISTS pgcrypto;</sql>
+    </changeSet>
+
+    <!-- agent_role table -->
+    <changeSet id="01-create-agent-role" author="junie">
+        <createTable tableName="agent_role">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="phase" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="code" type="TEXT"/>
+            <column name="is_default" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="display_name" type="TEXT"/>
+            <column name="description" type="TEXT"/>
+            <column name="active" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <!-- Optional semantic constraint for worker/default rows -->
+        <sql>
+            ALTER TABLE agent_role ADD CONSTRAINT chk_role_worker_semantics CHECK (
+              (phase &lt;&gt; 'WORKER' AND is_default = FALSE)
+              OR (phase = 'WORKER' AND (
+                    (is_default = TRUE AND code IS NULL) OR
+                    (is_default = FALSE AND code IS NOT NULL)
+                  ))
+            );
+        </sql>
+        <!-- Partial unique indexes to enforce singletons and role codes -->
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_role_orchestrator ON agent_role (phase) WHERE phase = 'ORCHESTRATOR';</sql>
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_role_synthesis ON agent_role (phase) WHERE phase = 'SYNTHESIS';</sql>
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_role_worker_default ON agent_role (phase) WHERE phase = 'WORKER' AND is_default = TRUE;</sql>
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_role_worker_code ON agent_role (lower(code)) WHERE phase = 'WORKER' AND is_default = FALSE;</sql>
+    </changeSet>
+
+    <!-- skill table -->
+    <changeSet id="02-create-skill" author="junie">
+        <createTable tableName="skill">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="instructions" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_skill_name ON skill (lower(name));</sql>
+    </changeSet>
+
+    <!-- role_skill table -->
+    <changeSet id="03-create-role-skill" author="junie">
+        <createTable tableName="role_skill">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="role_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="skill_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sort_order" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="enabled" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="role_skill" columnNames="role_id, skill_id" constraintName="uk_role_skill_unique"/>
+        <addForeignKeyConstraint baseTableName="role_skill" baseColumnNames="role_id"
+                                 referencedTableName="agent_role" referencedColumnNames="id"
+                                 onDelete="CASCADE" constraintName="fk_role_skill_role"/>
+        <addForeignKeyConstraint baseTableName="role_skill" baseColumnNames="skill_id"
+                                 referencedTableName="skill" referencedColumnNames="id"
+                                 onDelete="RESTRICT" constraintName="fk_role_skill_skill"/>
+        <createIndex tableName="role_skill" indexName="ix_role_skill_role">
+            <column name="role_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- tool table -->
+    <changeSet id="04-create-tool" author="junie">
+        <createTable tableName="tool">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_tool_name ON tool (lower(name));</sql>
+    </changeSet>
+
+    <!-- role_tool_policy table -->
+    <changeSet id="05-create-role-tool-policy" author="junie">
+        <createTable tableName="role_tool_policy">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="role_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="tool_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="policy" type="VARCHAR(8)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="role_tool_policy" columnNames="role_id, tool_id" constraintName="uk_role_tool_unique"/>
+        <addForeignKeyConstraint baseTableName="role_tool_policy" baseColumnNames="role_id"
+                                 referencedTableName="agent_role" referencedColumnNames="id"
+                                 onDelete="CASCADE" constraintName="fk_role_tool_role"/>
+        <addForeignKeyConstraint baseTableName="role_tool_policy" baseColumnNames="tool_id"
+                                 referencedTableName="tool" referencedColumnNames="id"
+                                 onDelete="RESTRICT" constraintName="fk_role_tool_tool"/>
+        <createIndex tableName="role_tool_policy" indexName="ix_role_tool_role">
+            <column name="role_id"/>
+        </createIndex>
+        <createIndex tableName="role_tool_policy" indexName="ix_role_tool_policy">
+            <column name="policy"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- Seed data: agent roles -->
+    <changeSet id="10-seed-roles" author="junie">
+        <preConditions onFail="MARK_RAN">
+            <dbms type="postgresql"/>
+        </preConditions>
+        <sql>
+            INSERT INTO agent_role(phase, code, is_default, display_name)
+            VALUES ('ORCHESTRATOR', NULL, FALSE, 'Orchestrator')
+            ON CONFLICT DO NOTHING;
+        </sql>
+        <sql>
+            INSERT INTO agent_role(phase, code, is_default, display_name)
+            VALUES ('SYNTHESIS', NULL, FALSE, 'Synthesis')
+            ON CONFLICT DO NOTHING;
+        </sql>
+        <sql>
+            INSERT INTO agent_role(phase, code, is_default, display_name)
+            VALUES ('WORKER', NULL, TRUE, 'Worker (Default)')
+            ON CONFLICT DO NOTHING;
+        </sql>
+        <sql>
+            INSERT INTO agent_role(phase, code, is_default, display_name) VALUES
+            ('WORKER','analysis',FALSE,'Analysis'),
+            ('WORKER','research',FALSE,'Research'),
+            ('WORKER','design',FALSE,'Design'),
+            ('WORKER','engineering',FALSE,'Engineering'),
+            ('WORKER','qa',FALSE,'QA'),
+            ('WORKER','writing',FALSE,'Writing'),
+            ('WORKER','general',FALSE,'General')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+    <!-- Seed data: tools -->
+    <changeSet id="11-seed-tools" author="junie">
+        <sql>
+            INSERT INTO tool(name, description) VALUES
+            ('list_directory','List files within the workspace scope'),
+            ('read_file','Read a file from the workspace'),
+            ('write_file','Create or overwrite a file within the workspace')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+    <!-- Seed data: default permissions -->
+    <changeSet id="12-seed-permissions" author="junie">
+        <sql>
+            INSERT INTO role_tool_policy(role_id, tool_id, policy)
+            SELECT r.id, t.id, 'ALLOW'
+            FROM agent_role r CROSS JOIN tool t
+            WHERE r.phase='WORKER' AND r.is_default=TRUE AND t.name IN ('list_directory','read_file')
+            ON CONFLICT DO NOTHING;
+        </sql>
+        <sql>
+            INSERT INTO role_tool_policy(role_id, tool_id, policy)
+            SELECT r.id, t.id, 'ALLOW'
+            FROM agent_role r JOIN tool t ON t.name='write_file'
+            WHERE r.phase='WORKER' AND r.code='engineering'
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

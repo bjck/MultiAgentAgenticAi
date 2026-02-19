@@ -975,6 +975,39 @@ button.tool-button.active:hover {
   color: var(--accent-strong);
 }
 
+/* Model Selection Styles */
+.model-selection {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.selection-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.selection-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.selection-group select {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #faf9f7;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
 /* Dark mode styles */
 [data-theme='dark'] {
   --bg: #1a202c;
@@ -1038,4 +1071,10 @@ button.tool-button.active:hover {
 [data-theme='dark'] .agent-feedback {
   background-color: #3b506b;
   color: var(--muted);
+}
+
+[data-theme='dark'] .model-selection select {
+  background: #2d3748;
+  color: var(--ink);
+  border-color: var(--border);
 }

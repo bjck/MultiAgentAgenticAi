@@ -21,13 +21,13 @@ public class ChatController {
 
     @PostMapping
     public ChatResponse chat(@Valid @RequestBody ChatRequest request) {
-        OrchestrationResult result = orchestratorService.orchestrate(request.message());
+        OrchestrationResult result = orchestratorService.orchestrate(request.message(), request.provider(), request.model());
         return ChatResponse.from(result);
     }
 
     @PostMapping("/plan")
     public PlanResponse plan(@Valid @RequestBody ChatRequest request) {
-        OrchestratorPlan plan = orchestratorService.plan(request.message());
+        OrchestratorPlan plan = orchestratorService.plan(request.message(), request.provider(), request.model());
         return PlanResponse.from(plan);
     }
 }

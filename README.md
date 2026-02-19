@@ -80,3 +80,44 @@ Access the UI at `http://localhost:8080`.
 
 ---
 *Developed as a reference implementation for Multi-Agent Agentic AI patterns.*
+
+
+
+## Local PostgreSQL with Docker Compose
+
+You can spin up a local Postgres database for the app using Docker Compose.
+
+Commands (PowerShell):
+
+```powershell
+# Start Postgres in background
+docker compose up -d
+
+# View logs
+docker compose logs -f postgres
+
+# Stop and remove
+docker compose down
+```
+
+Default credentials provisioned by docker-compose.yml:
+- DB: multiagent
+- User: multiagent
+- Password: multiagent
+- Port: 5432
+
+Configure the application to use this database (example env vars):
+
+```powershell
+$env:SPRING_DATASOURCE_URL = "jdbc:postgresql://localhost:5432/multiagent"
+$env:SPRING_DATASOURCE_USERNAME = "multiagent"
+$env:SPRING_DATASOURCE_PASSWORD = "multiagent"
+$env:LIQUIBASE_ENABLED = "true"   # apply migrations on startup
+
+mvn spring-boot:run
+```
+
+Notes:
+- Liquibase changelog is applied when `LIQUIBASE_ENABLED=true`.
+- The changelog enables `pgcrypto` (required for `gen_random_uuid()`), which is supported by the official Postgres image.
+- Persisted data is stored in a named Docker volume `postgres_data`.

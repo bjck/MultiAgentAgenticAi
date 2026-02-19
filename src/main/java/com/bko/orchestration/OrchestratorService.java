@@ -11,14 +11,25 @@ import com.bko.orchestration.service.FileEditDetectionService;
 import com.bko.orchestration.service.JsonProcessingService;
 import com.bko.orchestration.service.OrchestrationContextService;
 import com.bko.orchestration.service.OrchestrationPromptService;
+import com.bko.orchestration.service.ToolAccessPolicy;
+import com.bko.orchestration.service.FilteringToolCallbackProvider;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+
+import com.bko.entity.OrchestrationSession;
+import com.bko.entity.TaskLog;
+import com.bko.orchestration.service.OrchestrationPersistenceService;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,11 +45,11 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class OrchestratorService {
 
     private final ChatClient chatClient;
+    private final ChatClient openAiChatClient;
     private final MultiAgentProperties properties;
     private final ExecutorService workerExecutor;
     private final ToolCallbackProvider toolCallbackProvider;
@@ -52,90 +63,168 @@ public class OrchestratorService {
     private final OrchestrationPromptService orchestrationPromptService;
     private final OrchestrationContextService orchestrationContextService;
     private final JsonProcessingService jsonProcessingService;
+    private final ToolAccessPolicy toolAccessPolicy;
+    private final OrchestrationPersistenceService persistenceService;
+    private final ThreadLocal<OrchestrationSession> currentSession = new ThreadLocal<>();
+
+    public OrchestratorService(
+            ChatClient chatClient,
+            @Qualifier("openAiChatClient") ObjectProvider<ChatClient> openAiChatClientProvider,
+            MultiAgentProperties properties,
+            ExecutorService workerExecutor,
+            ToolCallbackProvider toolCallbackProvider,
+            FileEditDetectionService fileEditDetectionService,
+            OrchestrationPromptService orchestrationPromptService,
+            OrchestrationContextService orchestrationContextService,
+            JsonProcessingService jsonProcessingService,
+            ToolAccessPolicy toolAccessPolicy,
+            OrchestrationPersistenceService persistenceService) {
+        this.chatClient = chatClient;
+        this.openAiChatClient = openAiChatClientProvider.getIfAvailable();
+        this.properties = properties;
+        this.workerExecutor = workerExecutor;
+        this.toolCallbackProvider = toolCallbackProvider;
+        this.fileEditDetectionService = fileEditDetectionService;
+        this.orchestrationPromptService = orchestrationPromptService;
+        this.orchestrationContextService = orchestrationContextService;
+        this.jsonProcessingService = jsonProcessingService;
+        this.toolAccessPolicy = toolAccessPolicy;
+        this.persistenceService = persistenceService;
+    }
 
     @PreDestroy
     public void shutdown() {
         workerExecutor.shutdown();
     }
 
-    public OrchestrationResult orchestrate(String userMessage) {
-        boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
-        List<String> initialRoles = selectRoles(userMessage, requiresEdits, null);
-        List<TaskSpec> advisoryTasks = buildAdvisoryTasks(userMessage, initialRoles);
-        if (!advisoryTasks.isEmpty()) {
-            log.info("Advisory tasks scheduled: {}.", advisoryTasks.size());
-        }
-        List<WorkerResult> advisoryResults = runAdvisoryTasks(userMessage, advisoryTasks, requiresEdits);
-        String advisoryContext = orchestrationContextService.buildAdvisoryContext(advisoryResults);
+    private ChatClient.ChatClientRequestSpec getChatRequestSpec(String provider, String model) {
+        String activeProvider = StringUtils.hasText(provider) ? provider.toUpperCase() : properties.getAiProvider().name();
+        String activeModel = StringUtils.hasText(model) ? model : properties.getOpenai().getModel();
 
-        List<String> executionRoles = selectRoles(userMessage, requiresEdits, advisoryContext);
-        OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, executionRoles, advisoryContext);
-        OrchestratorPlan initialPlan = sanitizePlan(rawPlan, userMessage, requiresEdits, executionRoles, true, false);
-
-        List<TaskSpec> allTasks = new ArrayList<>(advisoryTasks);
-        List<WorkerResult> allResults = new ArrayList<>(advisoryResults);
-
-        OrchestratorPlan currentPlan = initialPlan;
-        int iteration = 0;
-        while (iteration < MAX_EXECUTION_ITERATIONS && currentPlan != null && !currentPlan.tasks().isEmpty()) {
-            log.info("Executing plan iteration {} with {} tasks.", iteration + 1, currentPlan.tasks().size());
-            List<WorkerResult> iterationResults = executePlanTasks(userMessage, currentPlan.tasks(),
-                    requiresEdits, advisoryContext, allResults);
-            allResults.addAll(iterationResults);
-            allTasks.addAll(currentPlan.tasks());
-
-            OrchestratorPlan continuationRaw = requestContinuationPlan(userMessage, requiresEdits, executionRoles,
-                    advisoryContext, currentPlan, allResults);
-            OrchestratorPlan continuationPlan = sanitizePlan(continuationRaw, userMessage, requiresEdits,
-                    executionRoles, true, true);
-            if (continuationPlan.tasks().isEmpty()) {
-                break;
+        if ("OPENAI".equals(activeProvider)) {
+            if (openAiChatClient == null) {
+                throw new IllegalStateException("OpenAI provider is not properly configured. " +
+                        "Check that you have a valid API key or a custom Base URL in your configuration.");
             }
-            currentPlan = continuationPlan;
-            iteration++;
+            var spec = openAiChatClient.prompt();
+            if (StringUtils.hasText(activeModel)) {
+                spec = spec.options(org.springframework.ai.openai.OpenAiChatOptions.builder().model(activeModel).build());
+            }
+            return spec;
         }
-
-        String objective = (initialPlan != null && StringUtils.hasText(initialPlan.objective()))
-                ? initialPlan.objective()
-                : userMessage;
-        OrchestratorPlan finalPlan = new OrchestratorPlan(objective, allTasks);
-        String finalAnswer = synthesize(userMessage, finalPlan, allResults);
-        logSummary();
-        return new OrchestrationResult(finalPlan, allResults, finalAnswer);
+        return chatClient.prompt();
     }
 
-    public OrchestratorPlan plan(String userMessage) {
-        boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
-        List<String> selectedRoles = selectRoles(userMessage, requiresEdits, null);
-        OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, selectedRoles, null);
-        return sanitizePlan(rawPlan, userMessage, requiresEdits, selectedRoles, false, false);
+    public OrchestrationResult orchestrate(String userMessage, String provider, String model) {
+        OrchestrationSession session = persistenceService.startSession(userMessage, provider, model);
+        currentSession.set(session);
+        try {
+            boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
+            List<String> initialRoles = selectRoles(userMessage, requiresEdits, null, provider, model);
+            List<TaskSpec> advisoryTasks = buildAdvisoryTasks(userMessage, initialRoles);
+            if (!advisoryTasks.isEmpty()) {
+                log.info("Advisory tasks scheduled: {}.", advisoryTasks.size());
+            }
+            List<WorkerResult> advisoryResults = runAdvisoryTasks(session, userMessage, advisoryTasks, requiresEdits, provider, model);
+            String advisoryContext = orchestrationContextService.buildAdvisoryContext(advisoryResults);
+
+            List<String> executionRoles = selectRoles(userMessage, requiresEdits, advisoryContext, provider, model);
+            OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, executionRoles, advisoryContext, provider, model);
+            OrchestratorPlan initialPlan = sanitizePlan(rawPlan, userMessage, requiresEdits, executionRoles, true, false);
+
+            var planLog = persistenceService.logPlan(session, initialPlan, true);
+            Map<String, TaskLog> taskIndex = new HashMap<>();
+            taskIndex.putAll(persistenceService.logTasks(planLog, initialPlan.tasks()));
+
+            List<TaskSpec> allTasks = new ArrayList<>(advisoryTasks);
+            List<WorkerResult> allResults = new ArrayList<>(advisoryResults);
+
+            OrchestratorPlan currentPlan = initialPlan;
+            int iteration = 0;
+            while (iteration < MAX_EXECUTION_ITERATIONS && currentPlan != null && !currentPlan.tasks().isEmpty()) {
+                log.info("Executing plan iteration {} with {} tasks.", iteration + 1, currentPlan.tasks().size());
+                List<WorkerResult> iterationResults = executePlanTasks(session, userMessage, currentPlan.tasks(),
+                        requiresEdits, advisoryContext, allResults, provider, model, taskIndex);
+                allResults.addAll(iterationResults);
+                allTasks.addAll(currentPlan.tasks());
+
+                OrchestratorPlan continuationRaw = requestContinuationPlan(userMessage, requiresEdits, executionRoles,
+                        advisoryContext, currentPlan, allResults, provider, model);
+                OrchestratorPlan continuationPlan = sanitizePlan(continuationRaw, userMessage, requiresEdits,
+                        executionRoles, true, true);
+                if (continuationPlan.tasks().isEmpty()) {
+                    break;
+                }
+                var contPlanLog = persistenceService.logPlan(session, continuationPlan, false);
+                taskIndex.putAll(persistenceService.logTasks(contPlanLog, continuationPlan.tasks()));
+                currentPlan = continuationPlan;
+                iteration++;
+            }
+
+            String objective = (initialPlan != null && StringUtils.hasText(initialPlan.objective()))
+                    ? initialPlan.objective()
+                    : userMessage;
+            OrchestratorPlan finalPlan = new OrchestratorPlan(objective, allTasks);
+            String finalAnswer = synthesize(session, userMessage, finalPlan, allResults, provider, model);
+            persistenceService.completeSession(session, finalAnswer, "COMPLETED");
+            logSummary();
+            return new OrchestrationResult(finalPlan, allResults, finalAnswer);
+        } finally {
+            currentSession.remove();
+        }
+    }
+
+    public OrchestratorPlan plan(String userMessage, String provider, String model) {
+        OrchestrationSession session = persistenceService.startSession(userMessage, provider, model);
+        currentSession.set(session);
+        try {
+            boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
+            List<String> selectedRoles = selectRoles(userMessage, requiresEdits, null, provider, model);
+            OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, selectedRoles, null, provider, model);
+            OrchestratorPlan sanitized = sanitizePlan(rawPlan, userMessage, requiresEdits, selectedRoles, false, false);
+            var planLog = persistenceService.logPlan(session, sanitized, true);
+            persistenceService.logTasks(planLog, sanitized.tasks());
+            persistenceService.completeSession(session, null, "PLANNED");
+            return sanitized;
+        } finally {
+            currentSession.remove();
+        }
     }
 
     private OrchestratorPlan requestPlan(String userMessage, boolean requiresEdits,
-                                         List<String> allowedRoles, @Nullable String context) {
+                                         List<String> allowedRoles, @Nullable String context,
+                                         String provider, String model) {
         try {
             String registry = orchestrationContextService.buildRoleRegistry(allowedRoles);
             String systemPrompt = orchestrationPromptService.orchestratorSystemPrompt(requiresEdits, allowedRoles, registry);
             String normalizedContext = orchestrationContextService.defaultContext(context);
             logLlmRequest(PURPOSE_PLAN, null);
-            String response = applyTools(chatClient.prompt())
+            String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                     .system(systemPrompt)
                     .user(user -> user.text(ORCHESTRATOR_USER_TEMPLATE)
                             .param("input", userMessage)
                             .param("context", normalizedContext))
                     .call()
                     .content();
+            try {
+                persistenceService.logPrompt(currentSession.get(), PURPOSE_PLAN, null, systemPrompt, ORCHESTRATOR_USER_TEMPLATE,
+                        Map.of("input", userMessage, "context", normalizedContext), response);
+            } catch (Exception ignore) { }
             OrchestratorPlan plan = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN, response, OrchestratorPlan.class);
             if (plan == null) {
                 String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
                 logLlmRequest(PURPOSE_PLAN_RETRY, null);
-                String retryResponse = applyTools(chatClient.prompt())
+                String retryResponse = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                         .system(retryPrompt)
                         .user(user -> user.text(ORCHESTRATOR_USER_TEMPLATE)
                                 .param("input", userMessage)
                                 .param("context", normalizedContext))
                         .call()
                         .content();
+                try {
+                    persistenceService.logPrompt(currentSession.get(), PURPOSE_PLAN_RETRY, null, retryPrompt, ORCHESTRATOR_USER_TEMPLATE,
+                            Map.of("input", userMessage, "context", normalizedContext), retryResponse);
+                } catch (Exception ignore) { }
                 plan = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_RETRY, retryResponse, OrchestratorPlan.class);
             }
             logPlanResponse(PURPOSE_PLAN, plan);
@@ -147,14 +236,15 @@ public class OrchestratorService {
 
     private OrchestratorPlan requestContinuationPlan(String userMessage, boolean requiresEdits,
                                                      List<String> allowedRoles, @Nullable String context,
-                                                     OrchestratorPlan plan, List<WorkerResult> results) {
+                                                     OrchestratorPlan plan, List<WorkerResult> results,
+                                                     String provider, String model) {
         try {
             String systemPrompt = orchestrationPromptService.executionReviewPrompt(requiresEdits, allowedRoles);
             String normalizedContext = orchestrationContextService.defaultContext(context);
             String planJson = jsonProcessingService.toJson(plan);
             String resultsJson = jsonProcessingService.toJson(results);
             logLlmRequest(PURPOSE_PLAN_REVIEW, null);
-            String response = applyTools(chatClient.prompt())
+            String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                     .system(systemPrompt)
                     .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
                             .param("input", userMessage)
@@ -163,11 +253,15 @@ public class OrchestratorService {
                             .param("results", resultsJson))
                     .call()
                     .content();
+            try {
+                persistenceService.logPrompt(currentSession.get(), PURPOSE_PLAN_REVIEW, null, systemPrompt, EXECUTION_REVIEW_USER_TEMPLATE,
+                        Map.of("input", userMessage, "context", normalizedContext, "plan", planJson, "results", resultsJson), response);
+            } catch (Exception ignore) { }
             OrchestratorPlan continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW, response, OrchestratorPlan.class);
             if (continuation == null) {
                 String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
                 logLlmRequest(PURPOSE_PLAN_REVIEW_RETRY, null);
-                String retryResponse = applyTools(chatClient.prompt())
+                String retryResponse = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                         .system(retryPrompt)
                         .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
                                 .param("input", userMessage)
@@ -176,6 +270,10 @@ public class OrchestratorService {
                                 .param("results", resultsJson))
                         .call()
                         .content();
+                try {
+                    persistenceService.logPrompt(currentSession.get(), PURPOSE_PLAN_REVIEW_RETRY, null, retryPrompt, EXECUTION_REVIEW_USER_TEMPLATE,
+                            Map.of("input", userMessage, "context", normalizedContext, "plan", planJson, "results", resultsJson), retryResponse);
+                } catch (Exception ignore) { }
                 continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW_RETRY, retryResponse, OrchestratorPlan.class);
             }
             logPlanResponse(PURPOSE_PLAN_REVIEW, continuation);
@@ -185,32 +283,42 @@ public class OrchestratorService {
         }
     }
 
-    private List<String> selectRoles(String userMessage, boolean requiresEdits, @Nullable String context) {
+    private List<String> selectRoles(String userMessage, boolean requiresEdits, @Nullable String context, String provider, String model) {
         List<String> availableRoles = normalizedRoles();
         String registry = orchestrationContextService.buildRoleRegistry(availableRoles);
         try {
+            String systemPrompt = orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles);
+            String normalizedContext = orchestrationContextService.defaultContext(context);
             logLlmRequest(PURPOSE_ROLE_SELECTION, null);
-            String response = applyTools(chatClient.prompt())
-                    .system(orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles))
+            String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+                    .system(systemPrompt)
                     .user(user -> user.text(ROLE_SELECTION_USER_TEMPLATE)
                             .param("input", userMessage)
-                            .param("context", orchestrationContextService.defaultContext(context))
+                            .param("context", normalizedContext)
                             .param("roles", registry))
                     .call()
                     .content();
+            try {
+                persistenceService.logPrompt(currentSession.get(), PURPOSE_ROLE_SELECTION, null, systemPrompt, ROLE_SELECTION_USER_TEMPLATE,
+                        Map.of("input", userMessage, "context", normalizedContext, "roles", registry), response);
+            } catch (Exception ignore) { }
             RoleSelection selection = jsonProcessingService.parseJsonResponse(PURPOSE_ROLE_SELECTION, response, RoleSelection.class);
             if (selection == null) {
                 String retryPrompt = orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles)
                         + INVALID_JSON_RETRY_PROMPT;
                 logLlmRequest(PURPOSE_ROLE_SELECTION_RETRY, null);
-                String retryResponse = applyTools(chatClient.prompt())
+                String retryResponse = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                         .system(retryPrompt)
                         .user(user -> user.text(ROLE_SELECTION_USER_TEMPLATE)
                                 .param("input", userMessage)
-                                .param("context", orchestrationContextService.defaultContext(context))
+                                .param("context", normalizedContext)
                                 .param("roles", registry))
                         .call()
                         .content();
+                try {
+                    persistenceService.logPrompt(currentSession.get(), PURPOSE_ROLE_SELECTION_RETRY, null, retryPrompt, ROLE_SELECTION_USER_TEMPLATE,
+                            Map.of("input", userMessage, "context", normalizedContext, "roles", registry), retryResponse);
+                } catch (Exception ignore) { }
                 selection = jsonProcessingService.parseJsonResponse(PURPOSE_ROLE_SELECTION_RETRY, retryResponse, RoleSelection.class);
             }
             List<String> roles = sanitizeSelectedRoles(selection != null ? selection.roles() : null, requiresEdits);
@@ -238,7 +346,7 @@ public class OrchestratorService {
         return tasks;
     }
 
-    private List<WorkerResult> runAdvisoryTasks(String userMessage, List<TaskSpec> advisoryTasks, boolean requiresEdits) {
+    private List<WorkerResult> runAdvisoryTasks(OrchestrationSession session, String userMessage, List<TaskSpec> advisoryTasks, boolean requiresEdits, String provider, String model) {
         if (advisoryTasks == null || advisoryTasks.isEmpty()) {
             return List.of();
         }
@@ -250,7 +358,7 @@ public class OrchestratorService {
                 .findFirst()
                 .orElse(null);
         if (analysisTask != null) {
-            results.add(runWorker(userMessage, analysisTask, requiresEdits, null));
+            results.add(runWorker(session, userMessage, analysisTask, requiresEdits, null, provider, model, null));
         }
         TaskSpec designTask = advisoryTasks.stream()
                 .filter(task -> ROLE_DESIGN.equals(task.role()))
@@ -258,13 +366,13 @@ public class OrchestratorService {
                 .orElse(null);
         if (designTask != null) {
             String analysisContext = orchestrationContextService.buildResultsContext(results);
-            results.add(runWorker(userMessage, designTask, requiresEdits, analysisContext));
+            results.add(runWorker(session, userMessage, designTask, requiresEdits, analysisContext, provider, model, null));
         }
         return results;
     }
 
-    private List<WorkerResult> executePlanTasks(String userMessage, List<TaskSpec> tasks, boolean requiresEdits,
-                                                String advisoryContext, List<WorkerResult> priorResults) {
+    private List<WorkerResult> executePlanTasks(OrchestrationSession session, String userMessage, List<TaskSpec> tasks, boolean requiresEdits,
+                                                String advisoryContext, List<WorkerResult> priorResults, String provider, String model, Map<String, TaskLog> taskIndex) {
         if (tasks == null || tasks.isEmpty()) {
             return List.of();
         }
@@ -283,8 +391,9 @@ public class OrchestratorService {
                     orchestrationContextService.buildResultsContext(orchestrationContextService.filterResultsByRole(priorResults, Set.of(ROLE_ENGINEERING))));
             for (TaskSpec task : engineeringTasks) {
                 String taskContext = engineeringContext;
+                TaskLog taskLog = taskIndex.get(task.id());
                 WorkerResult result = CompletableFuture
-                        .supplyAsync(() -> runWorker(userMessage, task, true, taskContext), workerExecutor)
+                        .supplyAsync(() -> runWorker(session, userMessage, task, true, taskContext, provider, model, taskLog), workerExecutor)
                         .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
                         .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
                                 WORKER_FAILED_MESSAGE + ex.getMessage()))
@@ -297,10 +406,13 @@ public class OrchestratorService {
             }
             String remainingContext = engineeringContext;
             List<CompletableFuture<WorkerResult>> futures = otherTasks.stream()
-                    .map(task -> CompletableFuture.supplyAsync(() -> runWorker(userMessage, task, true, remainingContext), workerExecutor)
-                            .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                            .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
-                                    "Worker failed: " + ex.getMessage())))
+                    .map(task -> {
+                        TaskLog tl = taskIndex.get(task.id());
+                        return CompletableFuture.supplyAsync(() -> runWorker(session, userMessage, task, true, remainingContext, provider, model, tl), workerExecutor)
+                                .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
+                                .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
+                                        "Worker failed: " + ex.getMessage()));
+                    })
                     .toList();
             results.addAll(futures.stream().map(CompletableFuture::join).toList());
             return results;
@@ -308,46 +420,66 @@ public class OrchestratorService {
 
         String context = orchestrationContextService.mergeContexts(advisoryContext, orchestrationContextService.buildResultsContext(priorResults));
         List<CompletableFuture<WorkerResult>> futures = tasks.stream()
-                .map(task -> CompletableFuture.supplyAsync(() -> runWorker(userMessage, task, false, context), workerExecutor)
-                        .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                        .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
-                                "Worker failed: " + ex.getMessage())))
+                .map(task -> {
+                    TaskLog tl = taskIndex.get(task.id());
+                    return CompletableFuture.supplyAsync(() -> runWorker(session, userMessage, task, false, context, provider, model, tl), workerExecutor)
+                            .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
+                            .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
+                                    "Worker failed: " + ex.getMessage()));
+                })
                 .toList();
         return futures.stream()
                 .map(CompletableFuture::join)
                 .toList();
     }
 
-    private WorkerResult runWorker(String userMessage, TaskSpec task, boolean requiresEdits, @Nullable String context) {
+    private WorkerResult runWorker(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits, @Nullable String context, String provider, String model, @Nullable TaskLog taskLog) {
         String systemPrompt = orchestrationPromptService.workerSystemPrompt(task.role(), requiresEdits);
         logLlmRequest(PURPOSE_WORKER_TASK, task.role());
-        String output = applyTools(chatClient.prompt())
+        String normalizedContext = orchestrationContextService.defaultContext(context);
+        String output = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.WORKER, task.role())
                 .system(systemPrompt)
                 .user(user -> user.text(WORKER_USER_TEMPLATE)
                         .param("input", userMessage)
-                        .param("context", orchestrationContextService.defaultContext(context))
+                        .param("context", normalizedContext)
                         .param("task", task.description())
                         .param("expectedOutput", task.expectedOutput()))
                 .call()
                 .content();
+        try {
+            Map<String, String> params = Map.of(
+                    "input", userMessage,
+                    "context", normalizedContext,
+                    "task", task.description(),
+                    "expectedOutput", task.expectedOutput()
+            );
+            persistenceService.logPrompt(session, PURPOSE_WORKER_TASK, task.role(), systemPrompt, WORKER_USER_TEMPLATE, params, output);
+            persistenceService.logWorkerResult(session, taskLog, task.role(), output);
+        } catch (Exception ignore) { }
         return new WorkerResult(task.id(), task.role(), output);
     }
 
-    private String synthesize(String userMessage, OrchestratorPlan plan, List<WorkerResult> results) {
+    private String synthesize(OrchestrationSession session, String userMessage, OrchestratorPlan plan, List<WorkerResult> results, String provider, String model) {
         if (results.size() == 1 && !ADVISORY_ROLES.contains(results.getFirst().role())) {
             return results.getFirst().output();
         }
         String planJson = jsonProcessingService.toJson(plan);
         String resultsJson = jsonProcessingService.toJson(results);
         logLlmRequest(PURPOSE_SYTHESIS, null);
-        return applyTools(chatClient.prompt())
-                .system(orchestrationPromptService.synthesisSystemPrompt())
+        String systemPrompt = orchestrationPromptService.synthesisSystemPrompt();
+        String out = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.SYNTHESIS, null)
+                .system(systemPrompt)
                 .user(user -> user.text(SYNTHESIS_USER_TEMPLATE)
                         .param("input", userMessage)
                         .param("plan", planJson)
                         .param("results", resultsJson))
                 .call()
                 .content();
+        try {
+            persistenceService.logPrompt(session, PURPOSE_SYTHESIS, null, systemPrompt, SYNTHESIS_USER_TEMPLATE,
+                    Map.of("input", userMessage, "plan", planJson, "results", resultsJson), out);
+        } catch (Exception ignore) { }
+        return out;
     }
 
     private OrchestratorPlan sanitizePlan(OrchestratorPlan plan, String userMessage, boolean requiresEdits,
@@ -464,11 +596,13 @@ public class OrchestratorService {
         return allowedRoles.isEmpty() ? ROLE_GENERAL : allowedRoles.getFirst();
     }
 
-    private ChatClient.ChatClientRequestSpec applyTools(ChatClient.ChatClientRequestSpec prompt) {
+    private ChatClient.ChatClientRequestSpec applyTools(ChatClient.ChatClientRequestSpec prompt, ToolAccessPolicy.Phase phase, @Nullable String role) {
         if (toolCallbackProvider == null) {
             return prompt;
         }
-        return prompt.toolCallbacks(toolCallbackProvider);
+        var allowed = toolAccessPolicy.allowedToolNames(phase, role);
+        var filtered = new FilteringToolCallbackProvider(toolCallbackProvider, allowed);
+        return prompt.toolCallbacks(filtered);
     }
 
     private void logLlmRequest(String purpose, @Nullable String role) {

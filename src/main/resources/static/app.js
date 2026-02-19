@@ -7,6 +7,9 @@ const finalOutput = document.getElementById("final-output");
 const clearChat = document.getElementById("clear-chat");
 const connectionLabel = document.getElementById("connection-label");
 const previewPlanBtn = document.getElementById("preview-plan");
+const providerSelect = document.getElementById("provider-select");
+const modelSelect = document.getElementById("model-select");
+const modelSelectGroup = document.getElementById("model-select-group");
 
 const fileList = document.getElementById("file-list");
 const pathDisplay = document.getElementById("path-display");
@@ -169,11 +172,13 @@ const closeDrawer = () => {
 
 const sendChat = async (message) => {
   setStatus("Running agents...");
+  const provider = providerSelect.value;
+  const model = modelSelect.value;
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, provider, model }),
     });
     if (!response.ok) {
       throw new Error(`Chat failed with ${response.status}`);
@@ -195,11 +200,13 @@ const sendChat = async (message) => {
 // Plan preview functionality
 const previewPlan = async (message) => {
   setStatus("Generating plan preview...");
+  const provider = providerSelect.value;
+  const model = modelSelect.value;
   try {
     const response = await fetch("/api/chat/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, provider, model }),
     });
     if (!response.ok) {
       throw new Error(`Plan preview failed with ${response.status}`);
@@ -669,9 +676,41 @@ document.getElementById("add-worker-role-skill").addEventListener("click", () =>
 
 refreshSkills.addEventListener("click", loadSkills);
 
+const loadModels = async () => {
+  try {
+    const data = await fetchJson("/api/models");
+    modelSelect.innerHTML = "";
+    if (data && data.data) {
+      data.data.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.id;
+        modelSelect.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    console.error("Failed to load models:", err);
+  }
+};
+
+providerSelect.addEventListener("change", () => {
+  if (providerSelect.value === "OPENAI") {
+    modelSelectGroup.style.display = "flex";
+    if (modelSelect.options.length === 0) {
+      loadModels();
+    }
+  } else {
+    modelSelectGroup.style.display = "none";
+  }
+});
+
 window.addEventListener("load", () => {
   loadFiles();
   loadSkills();
+  if (providerSelect.value === "OPENAI") {
+    modelSelectGroup.style.display = "flex";
+    loadModels();
+  }
   setConnection("Workspace loaded");
   const defaultSide = document.querySelector(".floating-tools .tool-button")?.dataset.side || "skills";
   setActiveSidePanel(defaultSide);

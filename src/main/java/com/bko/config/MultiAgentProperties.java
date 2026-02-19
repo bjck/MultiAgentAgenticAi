@@ -16,6 +16,42 @@ public class MultiAgentProperties {
             List.of("analysis", "research", "design", "engineering", "qa", "writing", "general"));
     private String workspaceRoot;
     private AgentSkillsConfig skills = new AgentSkillsConfig();
+    private AgentToolsConfig tools = new AgentToolsConfig();
+    private AiProvider aiProvider = AiProvider.GOOGLE;
+    private OpenAIConfig openai = new OpenAIConfig();
+
+    public enum AiProvider {
+        GOOGLE, OPENAI
+    }
+
+    public static class OpenAIConfig {
+        private String apiKey;
+        private String baseUrl = "https://api-cortex.t-netcompany.com/v1";
+        private String model = "claude-4-sonnet"; // Default from Postman
+
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
+    }
+
+    public AiProvider getAiProvider() {
+        return aiProvider;
+    }
+
+    public void setAiProvider(AiProvider aiProvider) {
+        this.aiProvider = aiProvider;
+    }
+
+    public OpenAIConfig getOpenai() {
+        return openai;
+    }
+
+    public void setOpenai(OpenAIConfig openai) {
+        this.openai = openai;
+    }
 
     public int getMaxTasks() {
         return maxTasks;
@@ -60,11 +96,20 @@ public class MultiAgentProperties {
         this.workspaceRoot = workspaceRoot;
     }
 
+
     public AgentSkillsConfig getSkills() {
         return skills;
     }
 
     public void setSkills(AgentSkillsConfig skills) {
         this.skills = skills != null ? skills : new AgentSkillsConfig();
+    }
+
+    public AgentToolsConfig getTools() {
+        return tools;
+    }
+
+    public void setTools(AgentToolsConfig tools) {
+        this.tools = tools != null ? tools : new AgentToolsConfig();
     }
 }
