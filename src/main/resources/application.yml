@@ -1,15 +1,36 @@
+logging:
+  level:
+    com.bko.http.logging: INFO
+    org.springframework.ai: DEBUG
+
 spring:
   application:
     name: multiagent
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/multiagent}
+    username: ${SPRING_DATASOURCE_USERNAME:multiagent}
+    password: ${SPRING_DATASOURCE_PASSWORD:multiagent}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   ai:
-    model:
-      chat: google-genai
     google:
       genai:
         api-key: ${GOOGLE_API_KEY}
         chat:
           options:
             model: gemini-2.5-flash
+    openai:
+      api-key: ${OPENAI_API_KEY:none}
+      base-url: ${OPENAI_BASE_URL:https://api-cortex.t-netcompany.com}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:claude-4-sonnet}
     mcp:
       client:
         type: SYNC
@@ -27,11 +48,20 @@ spring:
                 - ${MCP_FS_ARG3:@modelcontextprotocol/server-filesystem}
                 - ${MCP_FS_ROOT:${multiagent.workspace-root}}
 
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
+    enabled: ${LIQUIBASE_ENABLED:false}
+
 multiagent:
   max-tasks: 4
   worker-concurrency: 4
   worker-timeout: 90s
   workspace-root: ${WORKSPACE_ROOT:${user.dir}}
+  ai-provider: ${AI_PROVIDER:GOOGLE}
+  openai:
+    api-key: ${OPENAI_API_KEY:none}
+    base-url: ${OPENAI_BASE_URL:https://api-cortex.t-netcompany.com/v1}
+    model: ${OPENAI_MODEL:claude-4-sonnet}
   worker-roles:
     - analysis
     - research
@@ -57,3 +87,35 @@ multiagent:
       qa: []
       writing: []
       general: []
+  # Agent tools configuration - restrict tool exposure per agent to reduce tokens and enforce least privilege
+  tools:
+    orchestrator: []
+    synthesis: []
+    worker-defaults:
+      - list_directory
+      - read_file
+    workers:
+      analysis:
+        - list_directory
+        - read_file
+      research:
+        - list_directory
+        - read_file
+      design:
+        - list_directory
+        - read_file
+      engineering:
+        - list_directory
+        - read_file
+        - write_file
+      qa:
+        - list_directory
+        - read_file
+      writing:
+        - list_directory
+        - read_file
+      general:
+        - list_directory
+        - read_file
+
+

@@ -50,6 +50,21 @@
           </div>
         </div>
         <form id="chat-form" class="chat-form">
+          <div class="model-selection">
+            <div class="selection-group">
+              <label for="provider-select">AI Provider</label>
+              <select id="provider-select">
+                <option value="GOOGLE">Google Gemini</option>
+                <option value="OPENAI">OpenAI / Cortex</option>
+              </select>
+            </div>
+            <div class="selection-group" id="model-select-group" style="display: none;">
+              <label for="model-select">Model</label>
+              <select id="model-select">
+                <!-- Dynamically populated -->
+              </select>
+            </div>
+          </div>
           <label for="chat-input">Describe the feature you want to build</label>
           <textarea id="chat-input" placeholder="Build a login flow with email verification and update the docs."></textarea>
           <div class="chat-actions">

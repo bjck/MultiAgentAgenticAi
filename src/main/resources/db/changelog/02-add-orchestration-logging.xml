@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.24.xsd">
+
+    <!-- 1) Orchestration Session: The top-level entry for a user request -->
+    <changeSet id="20260219-02-1" author="junie">
+        <createTable tableName="orchestration_session">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="user_prompt" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="provider" type="VARCHAR(50)"/>
+            <column name="model" type="VARCHAR(100)"/>
+            <column name="final_answer" type="TEXT"/>
+            <column name="status" type="VARCHAR(20)" defaultValue="IN_PROGRESS"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- 2) Prompt Log: Every LLM interaction (request/response) -->
+    <changeSet id="20260219-02-2" author="junie">
+        <createTable tableName="prompt_log">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="session_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_prompt_session" referencedTableName="orchestration_session" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="purpose" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role" type="VARCHAR(50)"/>
+            <column name="system_prompt" type="TEXT"/>
+            <column name="user_prompt" type="TEXT"/>
+            <column name="full_response" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="prompt_log" indexName="ix_prompt_log_session">
+            <column name="session_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- 3) Plan Log: The plan(s) generated during the session -->
+    <changeSet id="20260219-02-3" author="junie">
+        <createTable tableName="orchestrator_plan_log">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="session_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_plan_session" referencedTableName="orchestration_session" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="objective" type="TEXT"/>
+            <column name="is_initial" type="BOOLEAN" defaultValue="true"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- 4) Task Log: Individual tasks defined in a plan -->
+    <changeSet id="20260219-02-4" author="junie">
+        <createTable tableName="task_log">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="plan_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_task_plan" referencedTableName="orchestrator_plan_log" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="task_id_alias" type="VARCHAR(50)"/> <!-- The ID from the JSON plan, e.g. "task_1" -->
+            <column name="role" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="expected_output" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <!-- 5) Worker Result Log: Results from task execution -->
+    <changeSet id="20260219-02-5" author="junie">
+        <createTable tableName="worker_result_log">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="session_id" type="UUID">
+                <constraints nullable="false" foreignKeyName="fk_result_session" referencedTableName="orchestration_session" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="task_log_id" type="UUID">
+                <constraints foreignKeyName="fk_result_task" referencedTableName="task_log" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="role" type="VARCHAR(50)"/>
+            <column name="output" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="worker_result_log" indexName="ix_worker_result_session">
+            <column name="session_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

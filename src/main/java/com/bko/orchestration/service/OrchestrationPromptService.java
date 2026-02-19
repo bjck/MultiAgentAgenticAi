@@ -14,13 +14,14 @@ import java.util.List;
 public class OrchestrationPromptService {
 
     private final MultiAgentProperties properties;
+    private final OrchestrationContextService contextService;
 
     public String roleSelectionPrompt(boolean requiresEdits, List<String> allowedRoles) {
         String basePrompt = ROLE_SELECTION_SYSTEM_PROMPT.formatted(String.join(", ", allowedRoles));
         if (requiresEdits) {
             basePrompt += ROLE_SELECTION_EDITS_INSTRUCTION;
         }
-        return basePrompt;
+        return appendWorkspaceContext(basePrompt);
     }
 
     public String orchestratorSystemPrompt(boolean requiresEdits, List<String> allowedRoles, String registry) {
@@ -28,7 +29,8 @@ public class OrchestrationPromptService {
         if (requiresEdits) {
             basePrompt = basePrompt + ORCHESTRATOR_EDITS_INSTRUCTION;
         }
-        return appendSkillsToPrompt(basePrompt, properties.getSkills().getOrchestrator());
+        basePrompt = appendSkillsToPrompt(basePrompt, properties.getSkills().getOrchestrator());
+        return appendWorkspaceContext(basePrompt);
     }
 
     public String executionReviewPrompt(boolean requiresEdits, List<String> allowedRoles) {
@@ -36,7 +38,7 @@ public class OrchestrationPromptService {
         if (requiresEdits) {
             basePrompt += EXECUTION_REVIEW_EDITS_INSTRUCTION;
         }
-        return basePrompt;
+        return appendWorkspaceContext(basePrompt);
     }
 
     public String workerSystemPrompt(String role, boolean requiresEdits) {
@@ -45,11 +47,17 @@ public class OrchestrationPromptService {
             basePrompt = basePrompt + WORKER_EDITS_INSTRUCTION;
         }
         List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
-        return appendSkillsToPrompt(basePrompt, skills);
+        basePrompt = appendSkillsToPrompt(basePrompt, skills);
+        return appendWorkspaceContext(basePrompt);
     }
 
     public String synthesisSystemPrompt() {
-        return appendSkillsToPrompt(SYNTHESIS_SYSTEM_PROMPT, properties.getSkills().getSynthesis());
+        String basePrompt = appendSkillsToPrompt(SYNTHESIS_SYSTEM_PROMPT, properties.getSkills().getSynthesis());
+        return appendWorkspaceContext(basePrompt);
+    }
+
+    private String appendWorkspaceContext(String basePrompt) {
+        return basePrompt + "\n\n" + contextService.buildWorkspaceContext();
     }
 
     private String appendSkillsToPrompt(String basePrompt, List<AgentSkill> skills) {
