@@ -17,6 +17,7 @@ import com.bko.orchestration.service.OrchestrationPromptService;
 import com.bko.orchestration.service.ToolAccessPolicy;
 import com.bko.orchestration.service.FilteringToolCallbackProvider;
 import com.bko.stream.OrchestrationStreamService;
+import com.bko.files.FileService;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -78,6 +79,7 @@ public class OrchestratorService {
     private final OrchestrationPersistenceService persistenceService;
     private final OrchestrationStreamService streamService;
     private final CollaborationStrategyService collaborationStrategyService;
+    private final FileService fileService;
     private final ThreadLocal<OrchestrationSession> currentSession = new ThreadLocal<>();
 
     private record AdvisoryBundle(List<TaskSpec> tasks, List<WorkerResult> results) {
@@ -99,7 +101,8 @@ public class OrchestratorService {
             ToolAccessPolicy toolAccessPolicy,
             OrchestrationPersistenceService persistenceService,
             OrchestrationStreamService streamService,
-            CollaborationStrategyService collaborationStrategyService) {
+            CollaborationStrategyService collaborationStrategyService,
+            FileService fileService) {
         this.chatClient = chatClient;
         this.openAiChatClient = openAiChatClientProvider.getIfAvailable();
         this.properties = properties;
@@ -113,6 +116,7 @@ public class OrchestratorService {
         this.persistenceService = persistenceService;
         this.streamService = streamService;
         this.collaborationStrategyService = collaborationStrategyService;
+        this.fileService = fileService;
     }
 
     @PreDestroy
@@ -927,7 +931,7 @@ public class OrchestratorService {
             return provider;
         }
         ToolCallback[] wrapped = Arrays.stream(callbacks)
-                .map(callback -> new AuditedToolCallback(callback, audit))
+                .map(callback -> new AuditedToolCallback(callback, audit, fileService))
                 .toArray(ToolCallback[]::new);
         return ToolCallbackProvider.from(wrapped);
     }
@@ -1039,7 +1043,15 @@ public class OrchestratorService {
         int writeCount() {
             int total = 0;
             for (ToolCallRecord record : snapshot()) {
-                if ("write_file".equalsIgnoreCase(record.name())) {
+                String name = record.name();
+                if (!StringUtils.hasText(name)) {
+                    continue;
+                }
+                String normalized = name.toLowerCase(Locale.ROOT);
+                if ("write_file".equals(normalized)
+                        || normalized.endsWith(".write_file")
+                        || normalized.endsWith("/write_file")
+                        || normalized.endsWith(":write_file")) {
                     total++;
                 }
             }
@@ -1067,10 +1079,13 @@ public class OrchestratorService {
     private static final class AuditedToolCallback implements ToolCallback {
         private final ToolCallback delegate;
         private final ToolCallAudit audit;
+        private final FileService fileService;
+        private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-        private AuditedToolCallback(ToolCallback delegate, ToolCallAudit audit) {
+        private AuditedToolCallback(ToolCallback delegate, ToolCallAudit audit, FileService fileService) {
             this.delegate = delegate;
             this.audit = audit;
+            this.fileService = fileService;
         }
 
         @Override
@@ -1085,16 +1100,12 @@ public class OrchestratorService {
 
         @Override
         public String call(String input) {
-            String output = delegate.call(input);
-            audit.recordCall(resolveToolName(), input, output);
-            return output;
+            return executeWithAudit(input, () -> delegate.call(input));
         }
 
         @Override
         public String call(String input, ToolContext toolContext) {
-            String output = delegate.call(input, toolContext);
-            audit.recordCall(resolveToolName(), input, output);
-            return output;
+            return executeWithAudit(input, () -> delegate.call(input, toolContext));
         }
 
         private String resolveToolName() {
@@ -1108,6 +1119,82 @@ public class OrchestratorService {
             }
             ToolDefinition def = delegate.getToolDefinition();
             return def != null ? def.toString() : "unknown";
+        }
+
+        private String executeWithAudit(String input, java.util.concurrent.Callable<String> call) {
+            String toolName = resolveToolName();
+            try {
+                String output = call.call();
+                audit.recordCall(toolName, input, output);
+                return output;
+            } catch (Exception ex) {
+                String fallback = attemptWriteFallback(toolName, input, ex);
+                if (fallback != null) {
+                    audit.recordCall(toolName, input, fallback);
+                    return fallback;
+                }
+                if (ex instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                throw new RuntimeException(ex);
+            }
+        }
+
+        private String attemptWriteFallback(String toolName, String input, Exception ex) {
+            if (!isWriteTool(toolName)) {
+                return null;
+            }
+            String message = ex.getMessage() == null ? "" : ex.getMessage();
+            if (!message.toLowerCase(Locale.ROOT).contains("parent directory does not exist")) {
+                return null;
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(input);
+                String path = "";
+                if (node.hasNonNull("path")) {
+                    path = node.get("path").asText();
+                } else if (node.hasNonNull("file_path")) {
+                    path = node.get("file_path").asText();
+                } else if (node.hasNonNull("filePath")) {
+                    path = node.get("filePath").asText();
+                }
+                if (!StringUtils.hasText(path)) {
+                    return null;
+                }
+                String content = node.hasNonNull("content") ? node.get("content").asText() : "";
+                fileService.write(path, content);
+                log.warn("write_file fallback succeeded by creating parent directories. path={}", path);
+                return fallbackJsonResponse("Fallback write_file: created parent directories and wrote file.");
+            } catch (Exception fallbackEx) {
+                log.warn("write_file fallback failed: {}", fallbackEx.getMessage());
+                return null;
+            }
+        }
+
+        private String fallbackJsonResponse(String message) {
+            try {
+                com.fasterxml.jackson.databind.node.ObjectNode root = objectMapper.createObjectNode();
+                com.fasterxml.jackson.databind.node.ArrayNode content = root.putArray("content");
+                com.fasterxml.jackson.databind.node.ObjectNode text = content.addObject();
+                text.put("type", "text");
+                text.put("text", message);
+                return objectMapper.writeValueAsString(root);
+            } catch (Exception ex) {
+                return "{\"content\":[{\"type\":\"text\",\"text\":\"" + message.replace("\"", "\\\"") + "\"}]}";
+            }
+        }
+
+        private boolean isWriteTool(String toolName) {
+            if (!StringUtils.hasText(toolName)) {
+                return false;
+            }
+            String normalized = toolName.toLowerCase(Locale.ROOT);
+            if ("write_file".equals(normalized)) {
+                return true;
+            }
+            return normalized.endsWith(".write_file")
+                    || normalized.endsWith("/write_file")
+                    || normalized.endsWith(":write_file");
         }
 
         private String reflectName(@Nullable Object target) {
