@@ -13,6 +13,7 @@ import com.bko.orchestration.service.OrchestrationContextService;
 import com.bko.orchestration.service.OrchestrationPromptService;
 import com.bko.orchestration.service.ToolAccessPolicy;
 import com.bko.orchestration.service.FilteringToolCallbackProvider;
+import com.bko.stream.OrchestrationStreamService;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -65,20 +66,28 @@ public class OrchestratorService {
     private final JsonProcessingService jsonProcessingService;
     private final ToolAccessPolicy toolAccessPolicy;
     private final OrchestrationPersistenceService persistenceService;
+    private final OrchestrationStreamService streamService;
     private final ThreadLocal<OrchestrationSession> currentSession = new ThreadLocal<>();
+
+    private record AdvisoryBundle(List<TaskSpec> tasks, List<WorkerResult> results) {
+        private AdvisoryBundle() {
+            this(List.of(), List.of());
+        }
+    }
 
     public OrchestratorService(
             ChatClient chatClient,
             @Qualifier("openAiChatClient") ObjectProvider<ChatClient> openAiChatClientProvider,
             MultiAgentProperties properties,
-            ExecutorService workerExecutor,
+            @Qualifier("workerExecutor") ExecutorService workerExecutor,
             ToolCallbackProvider toolCallbackProvider,
             FileEditDetectionService fileEditDetectionService,
             OrchestrationPromptService orchestrationPromptService,
             OrchestrationContextService orchestrationContextService,
             JsonProcessingService jsonProcessingService,
             ToolAccessPolicy toolAccessPolicy,
-            OrchestrationPersistenceService persistenceService) {
+            OrchestrationPersistenceService persistenceService,
+            OrchestrationStreamService streamService) {
         this.chatClient = chatClient;
         this.openAiChatClient = openAiChatClientProvider.getIfAvailable();
         this.properties = properties;
@@ -90,6 +99,7 @@ public class OrchestratorService {
         this.jsonProcessingService = jsonProcessingService;
         this.toolAccessPolicy = toolAccessPolicy;
         this.persistenceService = persistenceService;
+        this.streamService = streamService;
     }
 
     @PreDestroy
@@ -116,21 +126,58 @@ public class OrchestratorService {
     }
 
     public OrchestrationResult orchestrate(String userMessage, String provider, String model) {
+        return orchestrateInternal(userMessage, provider, model, null);
+    }
+
+    public OrchestrationResult orchestrateStreaming(String userMessage, String provider, String model, String streamId) {
+        return orchestrateInternal(userMessage, provider, model, streamId);
+    }
+
+    private OrchestrationResult orchestrateInternal(String userMessage, String provider, String model, @Nullable String streamId) {
         OrchestrationSession session = persistenceService.startSession(userMessage, provider, model);
         currentSession.set(session);
         try {
+            if (streamId != null) {
+                streamService.emitStatus(streamId, "Starting orchestration");
+            }
             boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
+            if (streamId != null) {
+                streamService.emitStatus(streamId, "Selecting roles");
+            }
             List<String> initialRoles = selectRoles(userMessage, requiresEdits, null, provider, model);
-            List<TaskSpec> advisoryTasks = buildAdvisoryTasks(userMessage, initialRoles);
+            List<WorkerResult> advisoryResults = new ArrayList<>();
+            List<TaskSpec> advisoryTasks = new ArrayList<>();
+
+            AdvisoryBundle analysisBundle = runAnalysisRounds(session, userMessage, initialRoles, requiresEdits, provider, model, streamId);
+            if (!analysisBundle.results().isEmpty()) {
+                advisoryResults.addAll(analysisBundle.results());
+                advisoryTasks.addAll(analysisBundle.tasks());
+            }
+
+            TaskSpec designTask = buildDesignTask(userMessage, initialRoles);
+            if (designTask != null) {
+                advisoryTasks.add(designTask);
+                String analysisContext = orchestrationContextService.buildResultsContext(analysisBundle.results());
+                if (streamId != null) {
+                    streamService.emitTaskStart(streamId, designTask);
+                }
+                advisoryResults.add(runWorker(session, userMessage, designTask, requiresEdits, analysisContext, provider, model, null, streamId));
+            }
+
             if (!advisoryTasks.isEmpty()) {
                 log.info("Advisory tasks scheduled: {}.", advisoryTasks.size());
             }
-            List<WorkerResult> advisoryResults = runAdvisoryTasks(session, userMessage, advisoryTasks, requiresEdits, provider, model);
             String advisoryContext = orchestrationContextService.buildAdvisoryContext(advisoryResults);
 
+            if (streamId != null) {
+                streamService.emitStatus(streamId, "Generating plan");
+            }
             List<String> executionRoles = selectRoles(userMessage, requiresEdits, advisoryContext, provider, model);
             OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, executionRoles, advisoryContext, provider, model);
             OrchestratorPlan initialPlan = sanitizePlan(rawPlan, userMessage, requiresEdits, executionRoles, true, false);
+            if (streamId != null) {
+                streamService.emitPlan(streamId, initialPlan);
+            }
 
             var planLog = persistenceService.logPlan(session, initialPlan, true);
             Map<String, TaskLog> taskIndex = new HashMap<>();
@@ -143,8 +190,11 @@ public class OrchestratorService {
             int iteration = 0;
             while (iteration < MAX_EXECUTION_ITERATIONS && currentPlan != null && !currentPlan.tasks().isEmpty()) {
                 log.info("Executing plan iteration {} with {} tasks.", iteration + 1, currentPlan.tasks().size());
+                if (streamId != null) {
+                    streamService.emitStatus(streamId, "Executing tasks (iteration " + (iteration + 1) + ")");
+                }
                 List<WorkerResult> iterationResults = executePlanTasks(session, userMessage, currentPlan.tasks(),
-                        requiresEdits, advisoryContext, allResults, provider, model, taskIndex);
+                        requiresEdits, advisoryContext, allResults, provider, model, taskIndex, streamId);
                 allResults.addAll(iterationResults);
                 allTasks.addAll(currentPlan.tasks());
 
@@ -158,6 +208,9 @@ public class OrchestratorService {
                 var contPlanLog = persistenceService.logPlan(session, continuationPlan, false);
                 taskIndex.putAll(persistenceService.logTasks(contPlanLog, continuationPlan.tasks()));
                 currentPlan = continuationPlan;
+                if (streamId != null) {
+                    streamService.emitPlanUpdate(streamId, currentPlan);
+                }
                 iteration++;
             }
 
@@ -165,8 +218,15 @@ public class OrchestratorService {
                     ? initialPlan.objective()
                     : userMessage;
             OrchestratorPlan finalPlan = new OrchestratorPlan(objective, allTasks);
+            if (streamId != null) {
+                streamService.emitStatus(streamId, "Synthesizing response");
+            }
             String finalAnswer = synthesize(session, userMessage, finalPlan, allResults, provider, model);
             persistenceService.completeSession(session, finalAnswer, "COMPLETED");
+            if (streamId != null) {
+                streamService.emitFinalAnswer(streamId, finalAnswer);
+                streamService.emitRunComplete(streamId, "COMPLETED");
+            }
             logSummary();
             return new OrchestrationResult(finalPlan, allResults, finalAnswer);
         } finally {
@@ -331,48 +391,116 @@ public class OrchestratorService {
         }
     }
 
-    private List<TaskSpec> buildAdvisoryTasks(String userMessage, List<String> selectedRoles) {
-        List<TaskSpec> tasks = new ArrayList<>();
-        if (selectedRoles.contains(ROLE_ANALYSIS)) {
-            tasks.add(new TaskSpec(TASK_ID_ANALYSIS, ROLE_ANALYSIS,
-                    ANALYSIS_TASK_DESCRIPTION,
-                    ANALYSIS_TASK_EXPECTED_OUTPUT));
+    private AdvisoryBundle runAnalysisRounds(OrchestrationSession session, String userMessage, List<String> selectedRoles,
+                                             boolean requiresEdits, String provider, String model, @Nullable String streamId) {
+        if (selectedRoles == null || !selectedRoles.contains(ROLE_ANALYSIS)) {
+            return new AdvisoryBundle();
         }
-        if (selectedRoles.contains(ROLE_DESIGN)) {
-            tasks.add(new TaskSpec(TASK_ID_DESIGN, ROLE_DESIGN,
-                    DESIGN_TASK_DESCRIPTION,
-                    DESIGN_TASK_EXPECTED_OUTPUT));
+        TaskSpec analysisTask = new TaskSpec(TASK_ID_ANALYSIS, ROLE_ANALYSIS,
+                ANALYSIS_TASK_DESCRIPTION, ANALYSIS_TASK_EXPECTED_OUTPUT);
+        if (streamId != null) {
+            streamService.emitTaskStart(streamId, analysisTask);
         }
-        return tasks;
+        WorkerResult result = runCollaborativeTask(session, userMessage, analysisTask, requiresEdits,
+                null, provider, model, null, streamId);
+        return new AdvisoryBundle(List.of(analysisTask), List.of(result));
     }
 
-    private List<WorkerResult> runAdvisoryTasks(OrchestrationSession session, String userMessage, List<TaskSpec> advisoryTasks, boolean requiresEdits, String provider, String model) {
-        if (advisoryTasks == null || advisoryTasks.isEmpty()) {
-            return List.of();
+    private TaskSpec buildDesignTask(String userMessage, List<String> selectedRoles) {
+        if (selectedRoles == null || !selectedRoles.contains(ROLE_DESIGN)) {
+            return null;
         }
-        long totalExecuted = taskExecutedCount.addAndGet(advisoryTasks.size());
-        log.info("Executing {} advisory tasks. Total tasks executed so far={}.", advisoryTasks.size(), totalExecuted);
-        List<WorkerResult> results = new ArrayList<>();
-        TaskSpec analysisTask = advisoryTasks.stream()
-                .filter(task -> ROLE_ANALYSIS.equals(task.role()))
-                .findFirst()
-                .orElse(null);
-        if (analysisTask != null) {
-            results.add(runWorker(session, userMessage, analysisTask, requiresEdits, null, provider, model, null));
+        return new TaskSpec(TASK_ID_DESIGN, ROLE_DESIGN, DESIGN_TASK_DESCRIPTION, DESIGN_TASK_EXPECTED_OUTPUT);
+    }
+
+    private WorkerResult runCollaborativeTask(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits,
+                                              @Nullable String baseContext, String provider, String model, @Nullable TaskLog taskLog,
+                                              @Nullable String streamId) {
+        MultiAgentProperties.RoleExecutionConfig exec = properties.getRoleExecutionConfig(task.role());
+        int rounds = Math.max(1, exec.getRounds());
+        int agents = Math.max(1, exec.getAgents());
+        String rollingContext = baseContext;
+        String finalSummary = "";
+        for (int round = 1; round <= rounds; round++) {
+            String roundContext = orchestrationContextService.mergeContexts(baseContext, rollingContext);
+            List<TaskSpec> roundTasks = new ArrayList<>(agents);
+            for (int agent = 1; agent <= agents; agent++) {
+                String id = task.id() + "-r" + round + "-a" + agent;
+                String description = task.description() + " (Round " + round + ", agent " + agent + ")";
+                roundTasks.add(new TaskSpec(id, task.role(), description, task.expectedOutput()));
+            }
+            List<CompletableFuture<WorkerResult>> futures = roundTasks.stream()
+                    .map(subTask -> {
+                        if (streamId != null) {
+                            streamService.emitTaskStart(streamId, subTask);
+                        }
+                        return CompletableFuture.supplyAsync(
+                                        () -> runWorker(session, userMessage, subTask, requiresEdits, roundContext, provider, model, taskLog, streamId),
+                                        workerExecutor)
+                                .orTimeout(properties.getWorkerTimeout().toSeconds(), TimeUnit.SECONDS)
+                                .exceptionally(ex -> {
+                                    WorkerResult failed = new WorkerResult(subTask.id(), subTask.role(),
+                                            WORKER_FAILED_MESSAGE + ex.getMessage());
+                                    if (streamId != null) {
+                                        streamService.emitTaskOutput(streamId, failed);
+                                        streamService.emitTaskComplete(streamId, failed);
+                                    }
+                                    return failed;
+                                });
+                    })
+                    .toList();
+            List<WorkerResult> roundResults = futures.stream().map(CompletableFuture::join).toList();
+            String summary = collaborateRound(userMessage, task, round, roundResults, provider, model);
+            finalSummary = summary;
+            rollingContext = orchestrationContextService.mergeContexts(rollingContext, summary);
+            TaskSpec summaryTask = new TaskSpec(task.id() + "-r" + round + "-summary", task.role(),
+                    "Collaboration summary for round " + round, "Summarize best findings.");
+            WorkerResult summaryResult = new WorkerResult(summaryTask.id(), summaryTask.role(), summary);
+            if (streamId != null) {
+                streamService.emitTaskStart(streamId, summaryTask);
+                streamService.emitTaskOutput(streamId, summaryResult);
+                streamService.emitTaskComplete(streamId, summaryResult);
+            }
         }
-        TaskSpec designTask = advisoryTasks.stream()
-                .filter(task -> ROLE_DESIGN.equals(task.role()))
-                .findFirst()
-                .orElse(null);
-        if (designTask != null) {
-            String analysisContext = orchestrationContextService.buildResultsContext(results);
-            results.add(runWorker(session, userMessage, designTask, requiresEdits, analysisContext, provider, model, null));
+        WorkerResult finalResult = new WorkerResult(task.id(), task.role(), finalSummary);
+        if (streamId != null) {
+            streamService.emitTaskOutput(streamId, finalResult);
+            streamService.emitTaskComplete(streamId, finalResult);
         }
-        return results;
+        try {
+            Map<String, String> params = Map.of(
+                    "input", userMessage,
+                    "context", orchestrationContextService.defaultContext(baseContext),
+                    "task", task.description(),
+                    "expectedOutput", task.expectedOutput()
+            );
+            persistenceService.logPrompt(session, PURPOSE_WORKER_TASK, task.role(),
+                    orchestrationPromptService.workerSystemPrompt(task.role(), requiresEdits),
+                    WORKER_USER_TEMPLATE, params, finalSummary);
+            persistenceService.logWorkerResult(session, taskLog, task.role(), finalSummary);
+        } catch (Exception ignore) { }
+        return finalResult;
+    }
+
+    private String collaborateRound(String userMessage, TaskSpec task, int round, List<WorkerResult> results,
+                                    String provider, String model) {
+        String systemPrompt = orchestrationPromptService.collaborationSystemPrompt(task.role());
+        String resultsJson = jsonProcessingService.toJson(results);
+        String output = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.SYNTHESIS, null)
+                .system(systemPrompt)
+                .user(user -> user.text(COLLABORATION_USER_TEMPLATE)
+                        .param("input", userMessage)
+                        .param("task", task.description())
+                        .param("round", String.valueOf(round))
+                        .param("results", resultsJson))
+                .call()
+                .content();
+        return output != null ? output : "";
     }
 
     private List<WorkerResult> executePlanTasks(OrchestrationSession session, String userMessage, List<TaskSpec> tasks, boolean requiresEdits,
-                                                String advisoryContext, List<WorkerResult> priorResults, String provider, String model, Map<String, TaskLog> taskIndex) {
+                                                String advisoryContext, List<WorkerResult> priorResults, String provider, String model,
+                                                Map<String, TaskLog> taskIndex, @Nullable String streamId) {
         if (tasks == null || tasks.isEmpty()) {
             return List.of();
         }
@@ -392,11 +520,21 @@ public class OrchestratorService {
             for (TaskSpec task : engineeringTasks) {
                 String taskContext = engineeringContext;
                 TaskLog taskLog = taskIndex.get(task.id());
+                if (streamId != null) {
+                    streamService.emitTaskStart(streamId, task);
+                }
                 WorkerResult result = CompletableFuture
-                        .supplyAsync(() -> runWorker(session, userMessage, task, true, taskContext, provider, model, taskLog), workerExecutor)
+                        .supplyAsync(() -> runCollaborativeTask(session, userMessage, task, true, taskContext, provider, model, taskLog, streamId), workerExecutor)
                         .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                        .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
-                                WORKER_FAILED_MESSAGE + ex.getMessage()))
+                        .exceptionally(ex -> {
+                            WorkerResult failed = new WorkerResult(task.id(), task.role(),
+                                    WORKER_FAILED_MESSAGE + ex.getMessage());
+                            if (streamId != null) {
+                                streamService.emitTaskOutput(streamId, failed);
+                                streamService.emitTaskComplete(streamId, failed);
+                            }
+                            return failed;
+                        })
                         .join();
                 results.add(result);
                 engineeringContext = orchestrationContextService.mergeContexts(engineeringContext, orchestrationContextService.buildResultsContext(List.of(result)));
@@ -408,10 +546,20 @@ public class OrchestratorService {
             List<CompletableFuture<WorkerResult>> futures = otherTasks.stream()
                     .map(task -> {
                         TaskLog tl = taskIndex.get(task.id());
-                        return CompletableFuture.supplyAsync(() -> runWorker(session, userMessage, task, true, remainingContext, provider, model, tl), workerExecutor)
+                        if (streamId != null) {
+                            streamService.emitTaskStart(streamId, task);
+                        }
+                        return CompletableFuture.supplyAsync(() -> runCollaborativeTask(session, userMessage, task, true, remainingContext, provider, model, tl, streamId), workerExecutor)
                                 .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                                .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
-                                        "Worker failed: " + ex.getMessage()));
+                                .exceptionally(ex -> {
+                                    WorkerResult failed = new WorkerResult(task.id(), task.role(),
+                                            WORKER_FAILED_MESSAGE + ex.getMessage());
+                                    if (streamId != null) {
+                                        streamService.emitTaskOutput(streamId, failed);
+                                        streamService.emitTaskComplete(streamId, failed);
+                                    }
+                                    return failed;
+                                });
                     })
                     .toList();
             results.addAll(futures.stream().map(CompletableFuture::join).toList());
@@ -422,10 +570,20 @@ public class OrchestratorService {
         List<CompletableFuture<WorkerResult>> futures = tasks.stream()
                 .map(task -> {
                     TaskLog tl = taskIndex.get(task.id());
-                    return CompletableFuture.supplyAsync(() -> runWorker(session, userMessage, task, false, context, provider, model, tl), workerExecutor)
+                    if (streamId != null) {
+                        streamService.emitTaskStart(streamId, task);
+                    }
+                    return CompletableFuture.supplyAsync(() -> runCollaborativeTask(session, userMessage, task, false, context, provider, model, tl, streamId), workerExecutor)
                             .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                            .exceptionally(ex -> new WorkerResult(task.id(), task.role(),
-                                    "Worker failed: " + ex.getMessage()));
+                            .exceptionally(ex -> {
+                                WorkerResult failed = new WorkerResult(task.id(), task.role(),
+                                        WORKER_FAILED_MESSAGE + ex.getMessage());
+                                if (streamId != null) {
+                                    streamService.emitTaskOutput(streamId, failed);
+                                    streamService.emitTaskComplete(streamId, failed);
+                                }
+                                return failed;
+                            });
                 })
                 .toList();
         return futures.stream()
@@ -433,7 +591,9 @@ public class OrchestratorService {
                 .toList();
     }
 
-    private WorkerResult runWorker(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits, @Nullable String context, String provider, String model, @Nullable TaskLog taskLog) {
+    private WorkerResult runWorker(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits,
+                                   @Nullable String context, String provider, String model, @Nullable TaskLog taskLog,
+                                   @Nullable String streamId) {
         String systemPrompt = orchestrationPromptService.workerSystemPrompt(task.role(), requiresEdits);
         logLlmRequest(PURPOSE_WORKER_TASK, task.role());
         String normalizedContext = orchestrationContextService.defaultContext(context);
@@ -446,6 +606,11 @@ public class OrchestratorService {
                         .param("expectedOutput", task.expectedOutput()))
                 .call()
                 .content();
+        WorkerResult result = new WorkerResult(task.id(), task.role(), output);
+        if (streamId != null) {
+            streamService.emitTaskOutput(streamId, result);
+            streamService.emitTaskComplete(streamId, result);
+        }
         try {
             Map<String, String> params = Map.of(
                     "input", userMessage,
@@ -456,7 +621,7 @@ public class OrchestratorService {
             persistenceService.logPrompt(session, PURPOSE_WORKER_TASK, task.role(), systemPrompt, WORKER_USER_TEMPLATE, params, output);
             persistenceService.logWorkerResult(session, taskLog, task.role(), output);
         } catch (Exception ignore) { }
-        return new WorkerResult(task.id(), task.role(), output);
+        return result;
     }
 
     private String synthesize(OrchestrationSession session, String userMessage, OrchestratorPlan plan, List<WorkerResult> results, String provider, String model) {

@@ -3,6 +3,7 @@ package com.bko.api;
 import com.bko.config.AgentSkill;
 import com.bko.config.AgentSkillsConfig;
 import com.bko.config.MultiAgentProperties;
+import com.bko.config.MultiAgentProperties.RoleExecutionConfig;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -28,6 +29,34 @@ public class ConfigController {
                 skills.getWorkers(),
                 properties.getWorkerRoles()
         );
+    }
+
+    @GetMapping("/role-settings")
+    public RoleSettingsResponse getRoleSettings() {
+        Map<String, RoleExecutionConfig> merged = new java.util.LinkedHashMap<>();
+        for (String role : properties.getWorkerRoles()) {
+            merged.put(role, properties.getRoleExecutionConfig(role));
+        }
+        return new RoleSettingsResponse(merged, properties.getRoleExecutionDefaults(), properties.getWorkerRoles());
+    }
+
+    @PutMapping("/role-settings")
+    public RoleSettingsResponse updateRoleSettings(@RequestBody RoleSettingsRequest request) {
+        if (request != null) {
+            if (request.defaults() != null) {
+                properties.setRoleExecutionDefaults(request.defaults());
+            }
+            if (request.roles() != null) {
+                Map<String, RoleExecutionConfig> normalized = new java.util.HashMap<>();
+                request.roles().forEach((key, value) -> {
+                    if (key != null && value != null) {
+                        normalized.put(key.toLowerCase(), value);
+                    }
+                });
+                properties.setRoleExecution(normalized);
+            }
+        }
+        return getRoleSettings();
     }
 
     @PutMapping("/skills/orchestrator")
@@ -59,6 +88,17 @@ public class ConfigController {
             List<AgentSkill> synthesis,
             List<AgentSkill> workerDefaults,
             Map<String, List<AgentSkill>> workers,
+            List<String> workerRoles
+    ) {}
+
+    public record RoleSettingsRequest(
+            RoleExecutionConfig defaults,
+            Map<String, RoleExecutionConfig> roles
+    ) {}
+
+    public record RoleSettingsResponse(
+            Map<String, RoleExecutionConfig> roles,
+            RoleExecutionConfig defaults,
             List<String> workerRoles
     ) {}
 }

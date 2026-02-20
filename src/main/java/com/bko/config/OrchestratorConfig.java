@@ -30,4 +30,9 @@ public class OrchestratorConfig {
     public ExecutorService workerExecutor(MultiAgentProperties properties) {
         return Executors.newFixedThreadPool(properties.getWorkerConcurrency());
     }
+
+    @Bean(destroyMethod = "shutdown")
+    public ExecutorService orchestrationExecutor() {
+        return Executors.newCachedThreadPool();
+    }
 }

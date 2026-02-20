@@ -1,6 +1,7 @@
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatStatus = document.getElementById("chat-status");
+const activeAgentsLabel = document.getElementById("active-agents");
 const planOutput = document.getElementById("plan-output");
 const workerOutput = document.getElementById("worker-output");
 const finalOutput = document.getElementById("final-output");
@@ -32,6 +33,9 @@ const refreshSkills = document.getElementById("refresh-skills");
 const workerRoleSelect = document.getElementById("worker-role");
 const skillsTabs = document.querySelectorAll(".skills-tabs .tab");
 const skillsPanels = document.querySelectorAll(".skills-panel");
+const roleSettingsDefaultsEl = document.getElementById("role-settings-defaults");
+const roleSettingsListEl = document.getElementById("role-settings-list");
+const saveRoleSettingsBtn = document.getElementById("save-role-settings");
 
 let currentPath = "";
 let selectedFile = "";
@@ -39,6 +43,16 @@ let skillsData = null;
 let currentWorkerRole = "";
 let currentPlan = null;
 let currentMessage = "";
+let streamSocket = null;
+let currentRunId = "";
+let lastEventId = 0;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let streamClosedByClient = false;
+const workerBuffers = new Map();
+const workerCards = new Map();
+const activeAgents = new Map();
+let roleSettings = null;
 
 const setStatus = (message) => {
   chatStatus.textContent = message;
@@ -46,6 +60,27 @@ const setStatus = (message) => {
 
 const setConnection = (message) => {
   connectionLabel.textContent = message;
+};
+
+const resetStreamState = () => {
+  workerBuffers.clear();
+  workerCards.clear();
+  activeAgents.clear();
+  lastEventId = 0;
+  currentPlan = null;
+  if (activeAgentsLabel) {
+    activeAgentsLabel.textContent = "None";
+  }
+};
+
+const updateActiveAgents = () => {
+  if (!activeAgentsLabel) return;
+  if (activeAgents.size === 0) {
+    activeAgentsLabel.textContent = "None";
+    return;
+  }
+  const entries = Array.from(activeAgents.entries()).map(([taskId, role]) => `${role} (${taskId})`);
+  activeAgentsLabel.textContent = entries.join(", ");
 };
 
 const renderPlan = (plan) => {
@@ -111,6 +146,62 @@ const renderWorkers = (results) => {
   });
 };
 
+const ensureWorkerCard = (taskId, role) => {
+  if (workerCards.has(taskId)) {
+    return workerCards.get(taskId);
+  }
+  workerOutput.classList.remove("empty");
+  if (workerCards.size === 0) {
+    workerOutput.innerHTML = "";
+  }
+  const card = document.createElement("div");
+  card.classList.add("worker-card");
+  card.dataset.taskId = taskId;
+
+  const heading = document.createElement("div");
+  heading.classList.add("worker-heading");
+
+  const roleEl = document.createElement("span");
+  roleEl.classList.add("role");
+  roleEl.textContent = role || "worker";
+
+  const taskEl = document.createElement("span");
+  taskEl.classList.add("task-id");
+  taskEl.textContent = taskId || "";
+
+  const statusEl = document.createElement("span");
+  statusEl.classList.add("worker-status");
+  statusEl.textContent = "Queued";
+
+  heading.appendChild(roleEl);
+  heading.appendChild(taskEl);
+  heading.appendChild(statusEl);
+
+  const body = document.createElement("div");
+  body.classList.add("markdown-content");
+  body.textContent = "";
+
+  card.appendChild(heading);
+  card.appendChild(body);
+  workerOutput.appendChild(card);
+  workerCards.set(taskId, { card, body, statusEl });
+  return workerCards.get(taskId);
+};
+
+const appendWorkerOutput = (taskId, role, chunk) => {
+  const entry = ensureWorkerCard(taskId, role);
+  const prev = workerBuffers.get(taskId) || "";
+  const next = prev + (chunk || "");
+  workerBuffers.set(taskId, next);
+  entry.body.innerHTML = renderMarkdown(next);
+};
+
+const setWorkerStatus = (taskId, role, statusText, isActive) => {
+  const entry = ensureWorkerCard(taskId, role);
+  entry.statusEl.textContent = statusText;
+  entry.card.classList.toggle("active", Boolean(isActive));
+};
+
 const renderFinal = (finalAnswer) => {
   if (!finalAnswer) {
     finalOutput.textContent = "No response returned.";
@@ -170,12 +261,128 @@ const closeDrawer = () => {
   document.body.classList.remove("drawer-open");
 };
 
+const closeStreamSocket = () => {
+  streamClosedByClient = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (streamSocket) {
+    streamSocket.close();
+    streamSocket = null;
+  }
+};
+
+const scheduleReconnect = () => {
+  if (streamClosedByClient) return;
+  reconnectAttempts += 1;
+  const delay = Math.min(8000, 500 * Math.pow(1.6, reconnectAttempts));
+  reconnectTimer = setTimeout(() => {
+    connectStream(currentRunId);
+  }, delay);
+  setConnection(`Reconnecting in ${Math.round(delay / 1000)}s...`);
+};
+
+const connectStream = (runId) => {
+  if (!runId) return;
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const url = `${protocol}://${window.location.host}/ws/stream?runId=${encodeURIComponent(runId)}&since=${encodeURIComponent(lastEventId)}`;
+  streamClosedByClient = false;
+  streamSocket = new WebSocket(url);
+
+  streamSocket.onopen = () => {
+    reconnectAttempts = 0;
+    setConnection("Live stream connected");
+  };
+
+  streamSocket.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload && typeof payload.id === "number") {
+        lastEventId = Math.max(lastEventId, payload.id);
+      }
+      handleStreamEvent(payload);
+    } catch (err) {
+      console.error("Stream parse error:", err);
+    }
+  };
+
+  streamSocket.onclose = () => {
+    if (!streamClosedByClient) {
+      scheduleReconnect();
+    }
+  };
+
+  streamSocket.onerror = () => {
+    streamSocket.close();
+  };
+};
+
+const handleStreamEvent = (event) => {
+  if (!event || !event.type) return;
+  const data = event.data || {};
+  switch (event.type) {
+    case "status":
+      setStatus(data.message || "Working...");
+      break;
+    case "plan":
+      currentPlan = data;
+      renderPlan(data);
+      break;
+    case "plan-update":
+      currentPlan = {
+        objective: data.objective || currentPlan?.objective || "",
+        tasks: [...(currentPlan?.tasks || []), ...(data.tasks || [])],
+      };
+      renderPlan(currentPlan);
+      break;
+    case "task-start":
+      activeAgents.set(data.taskId, data.role || "worker");
+      updateActiveAgents();
+      setWorkerStatus(data.taskId, data.role, "Running", true);
+      break;
+    case "task-output":
+      appendWorkerOutput(data.taskId, data.role, data.chunk || "");
+      if (data.done) {
+        setWorkerStatus(data.taskId, data.role, "Wrapping up", true);
+      }
+      break;
+    case "task-complete":
+      activeAgents.delete(data.taskId);
+      updateActiveAgents();
+      setWorkerStatus(data.taskId, data.role, "Complete", false);
+      break;
+    case "final":
+      renderFinal(data.finalAnswer || "");
+      break;
+    case "error":
+      setStatus("Failed to run agents.");
+      finalOutput.classList.remove("markdown-content");
+      finalOutput.textContent = data.message || "Streaming error.";
+      finalOutput.classList.remove("empty");
+      break;
+    case "run-complete":
+      setStatus("Agents complete.");
+      closeStreamSocket();
+      break;
+  }
+};
+
 const sendChat = async (message) => {
-  setStatus("Running agents...");
+  setStatus("Starting stream...");
   const provider = providerSelect.value;
   const model = modelSelect.value;
+  closeStreamSocket();
+  resetStreamState();
+  planOutput.textContent = "Waiting for plan...";
+  planOutput.classList.remove("empty");
+  workerOutput.textContent = "Awaiting worker output...";
+  workerOutput.classList.remove("empty");
+  finalOutput.textContent = "Streaming response...";
+  finalOutput.classList.remove("empty");
+  finalOutput.classList.remove("markdown-content");
   try {
-    const response = await fetch("/api/chat", {
+    const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, provider, model }),
@@ -184,13 +391,12 @@ const sendChat = async (message) => {
       throw new Error(`Chat failed with ${response.status}`);
     }
     const data = await response.json();
-    renderPlan(data.plan);
-    renderWorkers(data.workerResults);
-    renderFinal(data.finalAnswer);
-    setConnection("Last run: " + new Date(data.createdAt).toLocaleTimeString());
-    setStatus("Agents complete.");
+    currentRunId = data.runId;
+    lastEventId = 0;
+    connectStream(currentRunId);
+    setConnection("Stream starting...");
   } catch (error) {
-    setStatus("Failed to run agents.");
+    setStatus("Failed to start stream.");
     finalOutput.classList.remove("markdown-content");
     finalOutput.textContent = error.message;
     finalOutput.classList.remove("empty");
@@ -305,6 +511,9 @@ previewPlanBtn.addEventListener("click", () => {
 });
 
 clearChat.addEventListener("click", () => {
+  closeStreamSocket();
+  currentRunId = "";
+  resetStreamState();
   planOutput.textContent = "No plan yet.";
   planOutput.classList.add("empty");
   workerOutput.textContent = "No worker output yet.";
@@ -439,6 +648,86 @@ const loadSkills = async () => {
   }
 };
 
+const loadRoleSettings = async () => {
+  try {
+    roleSettings = await fetchJson("/api/config/role-settings");
+    renderRoleSettings();
+  } catch (error) {
+    console.error("Failed to load role settings:", error);
+  }
+};
+
+const renderRoleSettings = () => {
+  if (!roleSettingsDefaultsEl || !roleSettingsListEl || !roleSettings) return;
+  roleSettingsDefaultsEl.innerHTML = "";
+  roleSettingsListEl.innerHTML = "";
+
+  const defaultsCard = document.createElement("div");
+  defaultsCard.classList.add("role-setting-card");
+  defaultsCard.innerHTML = `
+    <h4>Defaults</h4>
+    <div class="role-setting-grid">
+      <div>
+        <label>Rounds</label>
+        <input type="number" min="1" step="1" value="${roleSettings.defaults?.rounds || 1}" data-role="__defaults__" data-field="rounds">
+      </div>
+      <div>
+        <label>Agents</label>
+        <input type="number" min="1" step="1" value="${roleSettings.defaults?.agents || 1}" data-role="__defaults__" data-field="agents">
+      </div>
+    </div>
+  `;
+  roleSettingsDefaultsEl.appendChild(defaultsCard);
+
+  (roleSettings.workerRoles || []).forEach((role) => {
+    const cfg = roleSettings.roles?.[role] || roleSettings.defaults || { rounds: 1, agents: 1 };
+    const card = document.createElement("div");
+    card.classList.add("role-setting-card");
+    card.innerHTML = `
+      <h4>${role}</h4>
+      <div class="role-setting-grid">
+        <div>
+          <label>Rounds</label>
+          <input type="number" min="1" step="1" value="${cfg.rounds || 1}" data-role="${role}" data-field="rounds">
+        </div>
+        <div>
+          <label>Agents</label>
+          <input type="number" min="1" step="1" value="${cfg.agents || 1}" data-role="${role}" data-field="agents">
+        </div>
+      </div>
+    `;
+    roleSettingsListEl.appendChild(card);
+  });
+};
+
+const saveRoleSettings = async () => {
+  if (!roleSettingsDefaultsEl || !roleSettingsListEl) return;
+  const inputs = document.querySelectorAll("#skills-role-settings input[data-role]");
+  const defaults = { rounds: 1, agents: 1 };
+  const roles = {};
+  inputs.forEach((input) => {
+    const role = input.dataset.role;
+    const field = input.dataset.field;
+    const value = Math.max(1, parseInt(input.value || "1", 10));
+    if (role === "__defaults__") {
+      defaults[field] = value;
+    } else {
+      roles[role] = roles[role] || {};
+      roles[role][field] = value;
+    }
+  });
+  try {
+    roleSettings = await fetchJson("/api/config/role-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ defaults, roles }),
+    });
+    renderRoleSettings();
+  } catch (error) {
+    console.error("Failed to save role settings:", error);
+  }
+};
+
 const populateWorkerRoles = () => {
   if (!skillsData || !skillsData.workerRoles) return;
   workerRoleSelect.innerHTML = "";
@@ -472,6 +761,9 @@ const renderSkillsForCurrentTab = () => {
     case "workers":
       const roleSkills = skillsData.workers[currentWorkerRole] || [];
       renderSkillsList("worker-role-skills", roleSkills, `workers/${currentWorkerRole}`);
+      break;
+    case "role-settings":
+      renderRoleSettings();
       break;
   }
 };
@@ -657,6 +949,10 @@ workerRoleSelect.addEventListener("change", (e) => {
   renderSkillsForCurrentTab();
 });
 
+if (saveRoleSettingsBtn) {
+  saveRoleSettingsBtn.addEventListener("click", saveRoleSettings);
+}
+
 // Add skill buttons
 document.getElementById("add-orchestrator-skill").addEventListener("click", () => {
   openSkillModal("orchestrator", -1, null);
@@ -674,7 +970,10 @@ document.getElementById("add-worker-role-skill").addEventListener("click", () =>
   openSkillModal(`workers/${currentWorkerRole}`, -1, null);
 });
 
-refreshSkills.addEventListener("click", loadSkills);
+refreshSkills.addEventListener("click", () => {
+  loadSkills();
+  loadRoleSettings();
+});
 
 const loadModels = async (provider) => {
   try {
@@ -707,6 +1006,7 @@ providerSelect.addEventListener("change", () => {
 window.addEventListener("load", () => {
   loadFiles();
   loadSkills();
+  loadRoleSettings();
   if (providerSelect.value === "OPENAI" || providerSelect.value === "GOOGLE") {
     modelSelectGroup.style.display = "flex";
     loadModels(providerSelect.value);
