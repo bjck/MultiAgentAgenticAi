@@ -59,6 +59,7 @@ multiagent:
   role-execution-defaults:
     rounds: 1
     agents: 1
+    collaboration-strategy: simple-summary
   role-execution:
     analysis:
       rounds: 2
@@ -76,6 +77,7 @@ multiagent:
     - research
     - design
     - engineering
+    - implementer
     - qa
     - writing
     - general
@@ -93,6 +95,7 @@ multiagent:
       research: []
       design: []
       engineering: []
+      implementer: []
       qa: []
       writing: []
       general: []
@@ -114,6 +117,9 @@ multiagent:
         - list_directory
         - read_file
       engineering:
+        - list_directory
+        - read_file
+      implementer:
         - list_directory
         - read_file
         - write_file

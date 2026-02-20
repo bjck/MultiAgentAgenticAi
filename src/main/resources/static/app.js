@@ -2,6 +2,7 @@ const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatStatus = document.getElementById("chat-status");
 const activeAgentsLabel = document.getElementById("active-agents");
+const sessionIdLabel = document.getElementById("session-id");
 const planOutput = document.getElementById("plan-output");
 const workerOutput = document.getElementById("worker-output");
 const finalOutput = document.getElementById("final-output");
@@ -53,9 +54,26 @@ const workerBuffers = new Map();
 const workerCards = new Map();
 const activeAgents = new Map();
 let roleSettings = null;
+const collaborationStrategies = [
+  { value: "SIMPLE_SUMMARY", label: "Simple summary" },
+  { value: "PROPOSAL_VOTE", label: "Proposal + vote" },
+  { value: "TWO_ROUND_CONVERGE", label: "Two-round converge" },
+  { value: "SCORECARD_RANKING", label: "Scorecard ranking" },
+];
 
 const setStatus = (message) => {
   chatStatus.textContent = message;
+};
+
+const buildPreviewText = (text) => {
+  const normalized = (text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "No output yet.";
+  const matches = normalized.match(/[^.!?]+[.!?]+/g);
+  let preview = matches && matches.length > 0 ? matches.slice(0, 2).join(" ").trim() : normalized;
+  if (preview.length > 240) {
+    preview = `${preview.slice(0, 240).trim()}…`;
+  }
+  return preview;
 };
 
 const setConnection = (message) => {
@@ -70,6 +88,9 @@ const resetStreamState = () => {
   currentPlan = null;
   if (activeAgentsLabel) {
     activeAgentsLabel.textContent = "None";
+  }
+  if (sessionIdLabel) {
+    sessionIdLabel.textContent = "—";
   }
 };
 
@@ -137,11 +158,28 @@ const renderWorkers = (results) => {
     heading.appendChild(role);
     heading.appendChild(taskId);
     heading.appendChild(agentFeedback); // Add agent feedback to the heading
+    const details = document.createElement("details");
+    details.classList.add("worker-spoiler");
+    const summary = document.createElement("summary");
+    summary.classList.add("worker-spoiler-summary");
+    const preview = document.createElement("span");
+    preview.classList.add("worker-preview");
+    preview.textContent = buildPreviewText(result.output || "");
+    const toggle = document.createElement("span");
+    toggle.classList.add("worker-toggle");
+    toggle.textContent = "Expand";
+    summary.appendChild(preview);
+    summary.appendChild(toggle);
+    details.appendChild(summary);
     const body = document.createElement("div");
     body.classList.add("markdown-content");
     body.innerHTML = renderMarkdown(result.output || "");
+    details.appendChild(body);
+    details.addEventListener("toggle", () => {
+      toggle.textContent = details.open ? "Collapse" : "Expand";
+    });
     card.appendChild(heading);
-    card.appendChild(body);
+    card.appendChild(details);
     workerOutput.appendChild(card);
   });
 };
@@ -177,14 +215,31 @@ const ensureWorkerCard = (taskId, role) => {
   heading.appendChild(taskEl);
   heading.appendChild(statusEl);
 
+  const details = document.createElement("details");
+  details.classList.add("worker-spoiler");
+  const summary = document.createElement("summary");
+  summary.classList.add("worker-spoiler-summary");
+  const preview = document.createElement("span");
+  preview.classList.add("worker-preview");
+  preview.textContent = "Awaiting output...";
+  const toggle = document.createElement("span");
+  toggle.classList.add("worker-toggle");
+  toggle.textContent = "Expand";
+  summary.appendChild(preview);
+  summary.appendChild(toggle);
+  details.appendChild(summary);
   const body = document.createElement("div");
   body.classList.add("markdown-content");
   body.textContent = "";
+  details.appendChild(body);
+  details.addEventListener("toggle", () => {
+    toggle.textContent = details.open ? "Collapse" : "Expand";
+  });
 
   card.appendChild(heading);
-  card.appendChild(body);
+  card.appendChild(details);
   workerOutput.appendChild(card);
-  workerCards.set(taskId, { card, body, statusEl });
+  workerCards.set(taskId, { card, body, statusEl, preview, details });
   return workerCards.get(taskId);
 };
 
@@ -194,6 +249,7 @@ const appendWorkerOutput = (taskId, role, chunk) => {
   const next = prev + (chunk || "");
   workerBuffers.set(taskId, next);
   entry.body.innerHTML = renderMarkdown(next);
+  entry.preview.textContent = buildPreviewText(next);
 };
 
 const setWorkerStatus = (taskId, role, statusText, isActive) => {
@@ -322,6 +378,11 @@ const handleStreamEvent = (event) => {
   if (!event || !event.type) return;
   const data = event.data || {};
   switch (event.type) {
+    case "session":
+      if (sessionIdLabel) {
+        sessionIdLabel.textContent = data.sessionId || "—";
+      }
+      break;
     case "status":
       setStatus(data.message || "Working...");
       break;
@@ -661,9 +722,19 @@ const renderRoleSettings = () => {
   if (!roleSettingsDefaultsEl || !roleSettingsListEl || !roleSettings) return;
   roleSettingsDefaultsEl.innerHTML = "";
   roleSettingsListEl.innerHTML = "";
+  const buildStrategyOptions = (selected) =>
+    collaborationStrategies
+      .map(
+        (strategy) =>
+          `<option value="${strategy.value}" ${
+            strategy.value === selected ? "selected" : ""
+          }>${strategy.label}</option>`
+      )
+      .join("");
 
   const defaultsCard = document.createElement("div");
   defaultsCard.classList.add("role-setting-card");
+  const defaultStrategy = roleSettings.defaults?.collaborationStrategy || "SIMPLE_SUMMARY";
   defaultsCard.innerHTML = `
     <h4>Defaults</h4>
     <div class="role-setting-grid">
@@ -675,12 +746,19 @@ const renderRoleSettings = () => {
         <label>Agents</label>
         <input type="number" min="1" step="1" value="${roleSettings.defaults?.agents || 1}" data-role="__defaults__" data-field="agents">
       </div>
+      <div>
+        <label>Collaboration</label>
+        <select data-role="__defaults__" data-field="collaborationStrategy">
+          ${buildStrategyOptions(defaultStrategy)}
+        </select>
+      </div>
     </div>
   `;
   roleSettingsDefaultsEl.appendChild(defaultsCard);
 
   (roleSettings.workerRoles || []).forEach((role) => {
     const cfg = roleSettings.roles?.[role] || roleSettings.defaults || { rounds: 1, agents: 1 };
+    const strategy = cfg.collaborationStrategy || defaultStrategy;
     const card = document.createElement("div");
     card.classList.add("role-setting-card");
     card.innerHTML = `
@@ -694,6 +772,12 @@ const renderRoleSettings = () => {
           <label>Agents</label>
           <input type="number" min="1" step="1" value="${cfg.agents || 1}" data-role="${role}" data-field="agents">
         </div>
+        <div>
+          <label>Collaboration</label>
+          <select data-role="${role}" data-field="collaborationStrategy">
+            ${buildStrategyOptions(strategy)}
+          </select>
+        </div>
       </div>
     `;
     roleSettingsListEl.appendChild(card);
@@ -702,13 +786,16 @@ const renderRoleSettings = () => {
 
 const saveRoleSettings = async () => {
   if (!roleSettingsDefaultsEl || !roleSettingsListEl) return;
-  const inputs = document.querySelectorAll("#skills-role-settings input[data-role]");
-  const defaults = { rounds: 1, agents: 1 };
+  const inputs = document.querySelectorAll("#skills-role-settings input[data-role], #skills-role-settings select[data-role]");
+  const defaults = { rounds: 1, agents: 1, collaborationStrategy: "SIMPLE_SUMMARY" };
   const roles = {};
   inputs.forEach((input) => {
     const role = input.dataset.role;
     const field = input.dataset.field;
-    const value = Math.max(1, parseInt(input.value || "1", 10));
+    const value =
+      field === "rounds" || field === "agents"
+        ? Math.max(1, parseInt(input.value || "1", 10))
+        : input.value;
     if (role === "__defaults__") {
       defaults[field] = value;
     } else {

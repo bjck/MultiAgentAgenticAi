@@ -596,6 +596,15 @@ button.tool-button.active:hover {
   width: 100%;
 }
 
+.role-setting-grid select {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #faf9f7;
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+}
+
 .skill-card {
   background: #faf9f7;
   border: 1px solid var(--border);
@@ -966,6 +975,51 @@ button.tool-button.active:hover {
   font-size: 12px;
 }
 
+.worker-spoiler {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fefdfb;
+}
+
+.worker-spoiler summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.worker-spoiler summary::-webkit-details-marker {
+  display: none;
+}
+
+.worker-preview {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.worker-toggle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-strong);
+  background: #f1eee7;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.worker-spoiler[open] .worker-toggle {
+  color: var(--muted);
+}
+
+.worker-spoiler .markdown-content {
+  padding: 10px 10px 4px;
+}
+
 /* Chat actions button styling */
 .chat-actions {
   display: flex;
@@ -1165,9 +1219,24 @@ button.tool-button.active:hover {
   border-color: var(--border);
 }
 
+[data-theme='dark'] .role-setting-grid select {
+  background: #2d3748;
+  color: var(--ink);
+}
+
 [data-theme='dark'] .worker-heading .worker-status {
   background: #4a5568;
   color: var(--muted);
+}
+
+[data-theme='dark'] .worker-spoiler {
+  background: #2d3748;
+  border-color: var(--border);
+}
+
+[data-theme='dark'] .worker-toggle {
+  background: #4a5568;
+  color: var(--accent);
 }
 
 [data-theme='dark'] .model-selection select {
