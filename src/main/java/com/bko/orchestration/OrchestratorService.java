@@ -17,6 +17,8 @@ import com.bko.orchestration.service.OrchestrationPromptService;
 import com.bko.orchestration.service.ToolAccessPolicy;
 import com.bko.orchestration.service.FilteringToolCallbackProvider;
 import com.bko.stream.OrchestrationStreamService;
+import com.bko.files.FileEntry;
+import com.bko.files.FileListing;
 import com.bko.files.FileService;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -166,7 +168,20 @@ public class OrchestratorService {
             List<WorkerResult> advisoryResults = new ArrayList<>();
             List<TaskSpec> advisoryTasks = new ArrayList<>();
 
-            AdvisoryBundle analysisBundle = runAnalysisRounds(session, userMessage, initialRoles, requiresEdits, provider, model, streamId);
+            TaskSpec contextTask = buildContextSyncTask(initialRoles);
+            String contextSyncContext = null;
+            if (contextTask != null) {
+                advisoryTasks.add(contextTask);
+                if (streamId != null) {
+                    streamService.emitTaskStart(streamId, contextTask);
+                }
+                WorkerResult contextResult = runWorker(session, userMessage, contextTask, false, null, provider, model, false, null, streamId);
+                advisoryResults.add(contextResult);
+                contextSyncContext = orchestrationContextService.buildResultsContext(List.of(contextResult));
+            }
+
+            AdvisoryBundle analysisBundle = runAnalysisRounds(session, userMessage, initialRoles, requiresEdits,
+                    provider, model, contextSyncContext, streamId);
             if (!analysisBundle.results().isEmpty()) {
                 advisoryResults.addAll(analysisBundle.results());
                 advisoryTasks.addAll(analysisBundle.tasks());
@@ -176,16 +191,19 @@ public class OrchestratorService {
             if (designTask != null) {
                 advisoryTasks.add(designTask);
                 String analysisContext = orchestrationContextService.buildResultsContext(analysisBundle.results());
+                String designContext = orchestrationContextService.mergeContexts(contextSyncContext, analysisContext);
                 if (streamId != null) {
                     streamService.emitTaskStart(streamId, designTask);
                 }
-                advisoryResults.add(runWorker(session, userMessage, designTask, requiresEdits, analysisContext, provider, model, true, null, streamId));
+                advisoryResults.add(runWorker(session, userMessage, designTask, requiresEdits, designContext, provider, model, true, null, streamId));
             }
 
             if (!advisoryTasks.isEmpty()) {
                 log.info("Advisory tasks scheduled: {}.", advisoryTasks.size());
             }
-            String advisoryContext = orchestrationContextService.buildAdvisoryContext(advisoryResults);
+            String advisoryContext = orchestrationContextService.mergeContexts(
+                    contextSyncContext,
+                    orchestrationContextService.buildAdvisoryContext(advisoryResults));
 
             if (streamId != null) {
                 streamService.emitStatus(streamId, "Generating plan");
@@ -216,10 +234,16 @@ public class OrchestratorService {
                 allResults.addAll(iterationResults);
                 allTasks.addAll(currentPlan.tasks());
 
+                List<FailureDetail> failures = collectFailures(iterationResults, currentPlan.tasks());
+                String errorSummary = buildErrorSummary(failures);
                 OrchestratorPlan continuationRaw = requestContinuationPlan(userMessage, requiresEdits, executionRoles,
-                        advisoryContext, currentPlan, allResults, provider, model);
+                        advisoryContext, errorSummary, currentPlan, allResults, provider, model);
                 OrchestratorPlan continuationPlan = sanitizePlan(continuationRaw, userMessage, requiresEdits,
                         executionRoles, true, true);
+                if (continuationPlan.tasks().isEmpty() && !failures.isEmpty()) {
+                    continuationPlan = sanitizePlan(buildRetryPlan(userMessage, failures), userMessage, requiresEdits,
+                            executionRoles, true, true);
+                }
                 if (continuationPlan.tasks().isEmpty()) {
                     break;
                 }
@@ -314,6 +338,7 @@ public class OrchestratorService {
 
     private OrchestratorPlan requestContinuationPlan(String userMessage, boolean requiresEdits,
                                                      List<String> allowedRoles, @Nullable String context,
+                                                     @Nullable String errorSummary,
                                                      OrchestratorPlan plan, List<WorkerResult> results,
                                                      String provider, String model) {
         try {
@@ -321,19 +346,22 @@ public class OrchestratorService {
             String normalizedContext = orchestrationContextService.defaultContext(context);
             String planJson = jsonProcessingService.toJson(plan);
             String resultsJson = jsonProcessingService.toJson(results);
+            String normalizedErrors = StringUtils.hasText(errorSummary) ? errorSummary : "None.";
             logLlmRequest(PURPOSE_PLAN_REVIEW, null);
             String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                     .system(systemPrompt)
                     .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
                             .param("input", userMessage)
                             .param("context", normalizedContext)
+                            .param("errors", normalizedErrors)
                             .param("plan", planJson)
                             .param("results", resultsJson))
                     .call()
                     .content();
             try {
                 persistenceService.logPrompt(currentSession.get(), PURPOSE_PLAN_REVIEW, null, systemPrompt, EXECUTION_REVIEW_USER_TEMPLATE,
-                        Map.of("input", userMessage, "context", normalizedContext, "plan", planJson, "results", resultsJson), response);
+                        Map.of("input", userMessage, "context", normalizedContext, "errors", normalizedErrors,
+                                "plan", planJson, "results", resultsJson), response);
             } catch (Exception ignore) { }
             OrchestratorPlan continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW, response, OrchestratorPlan.class);
             if (continuation == null) {
@@ -344,13 +372,15 @@ public class OrchestratorService {
                         .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
                                 .param("input", userMessage)
                                 .param("context", normalizedContext)
+                                .param("errors", normalizedErrors)
                                 .param("plan", planJson)
                                 .param("results", resultsJson))
                         .call()
                         .content();
                 try {
                     persistenceService.logPrompt(currentSession.get(), PURPOSE_PLAN_REVIEW_RETRY, null, retryPrompt, EXECUTION_REVIEW_USER_TEMPLATE,
-                            Map.of("input", userMessage, "context", normalizedContext, "plan", planJson, "results", resultsJson), retryResponse);
+                            Map.of("input", userMessage, "context", normalizedContext, "errors", normalizedErrors,
+                                    "plan", planJson, "results", resultsJson), retryResponse);
                 } catch (Exception ignore) { }
                 continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW_RETRY, retryResponse, OrchestratorPlan.class);
             }
@@ -410,7 +440,8 @@ public class OrchestratorService {
     }
 
     private AdvisoryBundle runAnalysisRounds(OrchestrationSession session, String userMessage, List<String> selectedRoles,
-                                             boolean requiresEdits, String provider, String model, @Nullable String streamId) {
+                                             boolean requiresEdits, String provider, String model, @Nullable String baseContext,
+                                             @Nullable String streamId) {
         if (selectedRoles == null || !selectedRoles.contains(ROLE_ANALYSIS)) {
             return new AdvisoryBundle();
         }
@@ -420,7 +451,7 @@ public class OrchestratorService {
             streamService.emitTaskStart(streamId, analysisTask);
         }
         WorkerResult result = runCollaborativeTask(session, userMessage, analysisTask, requiresEdits,
-                null, provider, model, null, streamId);
+                baseContext, provider, model, null, streamId);
         return new AdvisoryBundle(List.of(analysisTask), List.of(result));
     }
 
@@ -430,6 +461,13 @@ public class OrchestratorService {
         }
         return new TaskSpec(TASK_ID_DESIGN, ROLE_DESIGN, DESIGN_TASK_DESCRIPTION,
                 DESIGN_TASK_EXPECTED_OUTPUT.formatted(DESIGN_HANDOFF_SCHEMA));
+    }
+
+    private TaskSpec buildContextSyncTask(List<String> selectedRoles) {
+        String role = (selectedRoles != null && selectedRoles.contains(ROLE_ANALYSIS))
+                ? ROLE_ANALYSIS
+                : ROLE_GENERAL;
+        return new TaskSpec(TASK_ID_CONTEXT, role, CONTEXT_SYNC_TASK_DESCRIPTION, CONTEXT_SYNC_TASK_EXPECTED_OUTPUT);
     }
 
     private WorkerResult runCollaborativeTask(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits,
@@ -539,20 +577,28 @@ public class OrchestratorService {
         if (tasks == null || tasks.isEmpty()) {
             return List.of();
         }
-        long totalExecuted = taskExecutedCount.addAndGet(tasks.size());
-        log.info("Executing {} plan tasks. Total tasks executed so far={}.", tasks.size(), totalExecuted);
+        boolean contextAlreadyRun = priorResults != null && priorResults.stream()
+                .anyMatch(result -> TASK_ID_CONTEXT.equalsIgnoreCase(result.taskId()));
+        List<TaskSpec> effectiveTasks = contextAlreadyRun
+                ? tasks.stream().filter(task -> !TASK_ID_CONTEXT.equalsIgnoreCase(task.id())).toList()
+                : tasks;
+        if (effectiveTasks.isEmpty()) {
+            return List.of();
+        }
+        long totalExecuted = taskExecutedCount.addAndGet(effectiveTasks.size());
+        log.info("Executing {} plan tasks. Total tasks executed so far={}.", effectiveTasks.size(), totalExecuted);
         Duration timeout = properties.getWorkerTimeout();
         if (requiresEdits) {
-            List<TaskSpec> engineeringTasks = tasks.stream()
+            List<TaskSpec> engineeringTasks = effectiveTasks.stream()
                     .filter(task -> ROLE_ENGINEERING.equals(task.role()))
                     .toList();
-            List<TaskSpec> implementerTasks = tasks.stream()
+            List<TaskSpec> implementerTasks = effectiveTasks.stream()
                     .filter(task -> ROLE_IMPLEMENTER.equals(task.role()))
                     .toList();
-            List<TaskSpec> otherTasks = tasks.stream()
+            List<TaskSpec> otherTasks = effectiveTasks.stream()
                     .filter(task -> !ROLE_ENGINEERING.equals(task.role()) && !ROLE_IMPLEMENTER.equals(task.role()))
                     .toList();
-            List<WorkerResult> results = new ArrayList<>(tasks.size());
+            List<WorkerResult> results = new ArrayList<>(effectiveTasks.size());
             String sharedContext = orchestrationContextService.buildResultsContext(priorResults);
             String engineeringContext = orchestrationContextService.buildResultsContext(
                     orchestrationContextService.filterResultsByRole(priorResults, Set.of(ROLE_ENGINEERING)));
@@ -635,7 +681,7 @@ public class OrchestratorService {
         }
 
         String context = orchestrationContextService.buildResultsContext(priorResults);
-        List<CompletableFuture<WorkerResult>> futures = tasks.stream()
+        List<CompletableFuture<WorkerResult>> futures = effectiveTasks.stream()
                 .map(task -> {
                     TaskLog tl = taskIndex.get(task.id());
                     if (streamId != null) {
@@ -756,6 +802,77 @@ public class OrchestratorService {
         return out;
     }
 
+    private record FailureDetail(TaskSpec task, String reason) {
+    }
+
+    private List<FailureDetail> collectFailures(List<WorkerResult> results, List<TaskSpec> tasks) {
+        if (results == null || results.isEmpty() || tasks == null || tasks.isEmpty()) {
+            return List.of();
+        }
+        Map<String, TaskSpec> taskIndex = new HashMap<>();
+        for (TaskSpec task : tasks) {
+            taskIndex.put(task.id(), task);
+        }
+        List<FailureDetail> failures = new ArrayList<>();
+        for (WorkerResult result : results) {
+            if (!isFailureOutput(result.output())) {
+                continue;
+            }
+            TaskSpec task = taskIndex.get(result.taskId());
+            String reason = extractFailureReason(result.output());
+            if (task != null) {
+                failures.add(new FailureDetail(task, reason));
+            }
+        }
+        return failures;
+    }
+
+    private boolean isFailureOutput(@Nullable String output) {
+        if (!StringUtils.hasText(output)) {
+            return false;
+        }
+        String normalized = output.toLowerCase(Locale.ROOT);
+        return normalized.startsWith(WORKER_FAILED_MESSAGE.toLowerCase(Locale.ROOT))
+                || normalized.contains("tool error:");
+    }
+
+    private String extractFailureReason(String output) {
+        if (!StringUtils.hasText(output)) {
+            return "";
+        }
+        String trimmed = output.trim();
+        if (trimmed.startsWith(WORKER_FAILED_MESSAGE)) {
+            return trimmed.substring(WORKER_FAILED_MESSAGE.length()).trim();
+        }
+        return trimmed;
+    }
+
+    private String buildErrorSummary(List<FailureDetail> failures) {
+        if (failures == null || failures.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (FailureDetail failure : failures) {
+            sb.append("- [").append(failure.task().role()).append(" ")
+                    .append(failure.task().id()).append("] ")
+                    .append(failure.reason()).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private OrchestratorPlan buildRetryPlan(String objective, List<FailureDetail> failures) {
+        List<TaskSpec> tasks = new ArrayList<>();
+        for (FailureDetail failure : failures) {
+            TaskSpec task = failure.task();
+            String description = task.description();
+            if (StringUtils.hasText(failure.reason())) {
+                description = description + " (Retry and resolve error: " + failure.reason() + ")";
+            }
+            tasks.add(new TaskSpec(task.id(), task.role(), description, task.expectedOutput()));
+        }
+        return new OrchestratorPlan(objective, tasks);
+    }
+
     private OrchestratorPlan sanitizePlan(OrchestratorPlan plan, String userMessage, boolean requiresEdits,
                                           List<String> allowedRoles, boolean excludeAdvisory, boolean allowEmpty) {
         if (plan == null || plan.tasks() == null) {
@@ -765,13 +882,16 @@ public class OrchestratorService {
         String objective = StringUtils.hasText(plan.objective()) ? plan.objective() : userMessage;
         List<TaskSpec> incomingTasks = plan.tasks();
         int maxTasks = Math.min(properties.getMaxTasks(), incomingTasks.size());
-        List<TaskSpec> sanitized = new ArrayList<>(maxTasks);
+        List<TaskSpec> sanitized = new ArrayList<>(maxTasks + 1);
         List<String> normalizedRoles = normalizeAllowedRoles(allowedRoles);
+        TaskSpec contextTask = null;
         IntStream.range(0, maxTasks).forEach(index -> {
             TaskSpec task = incomingTasks.get(index);
             String role = normalizeRole(task.role(), normalizedRoles);
             if (excludeAdvisory && ADVISORY_ROLES.contains(role)) {
-                return;
+                if (!TASK_ID_CONTEXT.equalsIgnoreCase(task.id())) {
+                    return;
+                }
             }
             String id = StringUtils.hasText(task.id()) ? task.id() : TASK_PREFIX + (index + 1);
             String description = StringUtils.hasText(task.description()) ? task.description() : userMessage;
@@ -782,8 +902,31 @@ public class OrchestratorService {
                 boolean canEdit = ROLE_IMPLEMENTER.equals(role);
                 expectedOutput = fileEditDetectionService.appendFileEditInstruction(expectedOutput, canEdit);
             }
-            sanitized.add(new TaskSpec(id, role, description, expectedOutput));
+            TaskSpec normalizedTask = new TaskSpec(id, role, description, expectedOutput);
+            if (TASK_ID_CONTEXT.equalsIgnoreCase(id)) {
+                contextTask = normalizedTask;
+            } else {
+                sanitized.add(normalizedTask);
+            }
         });
+        if (contextTask == null) {
+            String contextRole = normalizedRoles.contains(ROLE_ANALYSIS)
+                    ? ROLE_ANALYSIS
+                    : (normalizedRoles.isEmpty() ? ROLE_GENERAL : normalizedRoles.getFirst());
+            contextTask = new TaskSpec(
+                    TASK_ID_CONTEXT,
+                    contextRole,
+                    CONTEXT_SYNC_TASK_DESCRIPTION,
+                    CONTEXT_SYNC_TASK_EXPECTED_OUTPUT
+            );
+        }
+        List<TaskSpec> withContext = new ArrayList<>(sanitized.size() + 1);
+        withContext.add(contextTask);
+        withContext.addAll(sanitized);
+        if (withContext.size() > properties.getMaxTasks()) {
+            withContext = withContext.subList(0, properties.getMaxTasks());
+        }
+        sanitized = withContext;
         if (requiresEdits && sanitized.stream().noneMatch(task -> ROLE_IMPLEMENTER.equals(task.role()))) {
             sanitized.add(new TaskSpec(TASK_ID_IMPLEMENTATION, ROLE_IMPLEMENTER, userMessage,
                     fileEditDetectionService.appendFileEditInstruction(DEFAULT_IMPLEMENTATION_INSTRUCTION, true)));
@@ -1128,7 +1271,12 @@ public class OrchestratorService {
                 audit.recordCall(toolName, input, output);
                 return output;
             } catch (Exception ex) {
-                String fallback = attemptWriteFallback(toolName, input, ex);
+                String fallback = attemptReadFallback(toolName, input, ex);
+                if (fallback != null) {
+                    audit.recordCall(toolName, input, fallback);
+                    return fallback;
+                }
+                fallback = attemptWriteFallback(toolName, input, ex);
                 if (fallback != null) {
                     audit.recordCall(toolName, input, fallback);
                     return fallback;
@@ -1149,18 +1297,11 @@ public class OrchestratorService {
                 return null;
             }
             try {
-                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(input);
-                String path = "";
-                if (node.hasNonNull("path")) {
-                    path = node.get("path").asText();
-                } else if (node.hasNonNull("file_path")) {
-                    path = node.get("file_path").asText();
-                } else if (node.hasNonNull("filePath")) {
-                    path = node.get("filePath").asText();
-                }
+                String path = extractPathFromInput(input);
                 if (!StringUtils.hasText(path)) {
                     return null;
                 }
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(input);
                 String content = node.hasNonNull("content") ? node.get("content").asText() : "";
                 fileService.write(path, content);
                 log.warn("write_file fallback succeeded by creating parent directories. path={}", path);
@@ -1169,6 +1310,32 @@ public class OrchestratorService {
                 log.warn("write_file fallback failed: {}", fallbackEx.getMessage());
                 return null;
             }
+        }
+
+        private String attemptReadFallback(String toolName, String input, Exception ex) {
+            if (!isReadTool(toolName) && !isListTool(toolName)) {
+                return null;
+            }
+            String message = ex.getMessage() == null ? "" : ex.getMessage();
+            String normalized = message.toLowerCase(Locale.ROOT);
+            if (!(normalized.contains("no such file") || normalized.contains("not found") || normalized.contains("enoent"))) {
+                return null;
+            }
+            String hint = "";
+            try {
+                String path = extractPathFromInput(input);
+                if (!StringUtils.hasText(path)) {
+                    path = extractPathFromMessage(message);
+                }
+                if (StringUtils.hasText(path)) {
+                    hint = buildDirectoryHint(path);
+                }
+            } catch (Exception ignore) {
+                // ignore hint failures
+            }
+            log.warn("Recoverable tool error for {}: {}", toolName, message);
+            String combined = hint.isBlank() ? "Tool error: " + message : "Tool error: " + message + " " + hint;
+            return fallbackJsonResponse(combined);
         }
 
         private String fallbackJsonResponse(String message) {
@@ -1189,12 +1356,95 @@ public class OrchestratorService {
                 return false;
             }
             String normalized = toolName.toLowerCase(Locale.ROOT);
-            if ("write_file".equals(normalized)) {
+            return matchesToolSuffix(normalized, "write_file");
+        }
+
+        private boolean isReadTool(String toolName) {
+            if (!StringUtils.hasText(toolName)) {
+                return false;
+            }
+            String normalized = toolName.toLowerCase(Locale.ROOT);
+            return matchesToolSuffix(normalized, "read_file");
+        }
+
+        private boolean isListTool(String toolName) {
+            if (!StringUtils.hasText(toolName)) {
+                return false;
+            }
+            String normalized = toolName.toLowerCase(Locale.ROOT);
+            return matchesToolSuffix(normalized, "list_directory");
+        }
+
+        private boolean matchesToolSuffix(String name, String tool) {
+            if (tool.equals(name)) {
                 return true;
             }
-            return normalized.endsWith(".write_file")
-                    || normalized.endsWith("/write_file")
-                    || normalized.endsWith(":write_file");
+            return name.endsWith("." + tool)
+                    || name.endsWith("/" + tool)
+                    || name.endsWith(":" + tool);
+        }
+
+        private String extractPathFromInput(String input) {
+            if (!StringUtils.hasText(input)) {
+                return "";
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(input);
+                if (node.hasNonNull("path")) {
+                    return node.get("path").asText();
+                }
+                if (node.hasNonNull("file_path")) {
+                    return node.get("file_path").asText();
+                }
+                if (node.hasNonNull("filePath")) {
+                    return node.get("filePath").asText();
+                }
+            } catch (Exception ignore) {
+                // ignore parse errors
+            }
+            return "";
+        }
+
+        private String extractPathFromMessage(String message) {
+            if (!StringUtils.hasText(message)) {
+                return "";
+            }
+            String[] markers = {"open '", "open \"", "exist: ", "file not found: "};
+            for (String marker : markers) {
+                int start = message.toLowerCase(Locale.ROOT).indexOf(marker);
+                if (start >= 0) {
+                    int begin = start + marker.length();
+                    int end = message.indexOf('\'', begin);
+                    if (end < 0) {
+                        end = message.indexOf('"', begin);
+                    }
+                    if (end < 0) {
+                        end = message.length();
+                    }
+                    return message.substring(begin, end).trim();
+                }
+            }
+            return "";
+        }
+
+        private String buildDirectoryHint(String path) {
+            try {
+                java.nio.file.Path parent = java.nio.file.Paths.get(path).getParent();
+                String parentPath = parent == null ? "" : parent.toString();
+                FileListing listing = fileService.list(parentPath);
+                List<FileEntry> entries = listing.entries();
+                if (entries == null || entries.isEmpty()) {
+                    return "Directory is empty.";
+                }
+                String names = entries.stream()
+                        .limit(20)
+                        .map(FileEntry::name)
+                        .toList()
+                        .toString();
+                return "Directory entries: " + names;
+            } catch (Exception ignore) {
+                return "";
+            }
         }
 
         private String reflectName(@Nullable Object target) {

@@ -1,0 +1,153 @@
+/* frontend/src/styles/SkillManager.css */
+.skill-manager-container {
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 10px;
+  background-color: var(--sidebar-section-background);
+  color: var(--text-color);
+  margin-top: 10px;
+}
+
+.skill-manager-container.error {
+  color: var(--error-color);
+}
+
+.skill-manager-container h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: var(--sidebar-heading-color);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 5px;
+}
+
+.skill-form, .edit-skill-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px dashed var(--border-color);
+}
+
+.skill-form:last-of-type, .edit-skill-form:last-of-type {
+  border-bottom: none;
+}
+
+.skill-form input[type="text"],
+.skill-form textarea,
+.edit-skill-form input[type="text"],
+.edit-skill-form textarea {
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid var(--input-border);
+  background-color: var(--input-background);
+  color: var(--text-color);
+  font-size: 0.9rem;
+}
+
+.skill-form textarea, .edit-skill-form textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.skill-form button[type="submit"],
+.edit-skill-form button[type="submit"] {
+  background-color: var(--button-background);
+  color: var(--button-text-color);
+  border: none;
+  padding: 8px 15px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background-color 0.2s ease;
+}
+
+.skill-form button[type="submit"]:hover,
+.edit-skill-form button[type="submit"]:hover {
+  background-color: var(--button-hover-background);
+}
+
+.skill-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.skill-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+  gap: 10px;
+}
+
+.skill-item:last-child {
+  border-bottom: none;
+}
+
+.skill-details {
+  flex: 1;
+}
+
+.skill-details h4 {
+  margin: 0 0 5px 0;
+  color: var(--text-color);
+  font-size: 1rem;
+}
+
+.skill-details p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-color);
+  opacity: 0.8;
+}
+
+.skill-actions, .edit-actions {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0; /* Prevent actions from shrinking */
+}
+
+.skill-actions button, .edit-actions button {
+  padding: 5px 10px;
+  border-radius: 3px;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background-color 0.2s ease;
+}
+
+.skill-actions .edit-button {
+  background-color: #ffc107; /* Yellowish */
+  color: #333;
+}
+
+.skill-actions .edit-button:hover {
+  background-color: #e0a800;
+}
+
+.skill-actions .delete-button {
+  background-color: #dc3545; /* Red */
+  color: #fff;
+}
+
+.skill-actions .delete-button:hover {
+  background-color: #c82333;
+}
+
+.edit-actions .cancel-button {
+  background-color: #6c757d; /* Grey */
+  color: #fff;
+}
+
+.edit-actions .cancel-button:hover {
+  background-color: #5a6268;
+}
+
+.empty-message {
+  padding: 10px;
+  text-align: center;
+  color: var(--text-color);
+  opacity: 0.7;
+}

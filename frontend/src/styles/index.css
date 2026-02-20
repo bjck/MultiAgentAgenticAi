@@ -1,0 +1,194 @@
+/* frontend/src/styles/index.css */
+/* Adjusted CSS to define theme-specific custom properties (`--background-color`, `--text-color`, etc.) under `body.light-theme` and `body.dark-theme` classes, ensuring dynamic styling based on the active theme. */
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Base styles for the body */
+body {
+  margin: 0;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Light theme variables */
+body.light-theme {
+  --background-color: #f0f2f5;
+  --text-color: #333;
+  --text-color-dark: #1f1f1f;
+  --text-color-light: #666;
+  --header-background: #fff;
+  --header-text-color: #333;
+  --sidebar-background: #f8f9fa;
+  --sidebar-text-color: #333;
+  --hover-background: #eef1f5;
+  --sidebar-hover-background: #e9ecef;
+  --sidebar-active-background: #dee2e6;
+  --button-background: #007bff;
+  --button-text-color: #fff;
+  --button-hover-background: #0056b3;
+  --button-border: #007bff;
+  --button-border-color: #007bff;
+  --button-hover-border-color: #0056b3;
+  --primary-color: #007bff;
+  --primary-color-dark: #0056b3;
+  --primary-color-rgb: 0, 123, 255;
+  --border-color: #ddd;
+  --border-color-light: #e5e7eb;
+  --chat-background: #fff;
+  --user-message-background: #e0f7fa;
+  --agent-message-background: #f1f1f1;
+  --input-background: #fff;
+  --input-border: #ccc;
+  --plan-background: #fff3cd; /* Light yellow */
+  --plan-border: #ffeeba;
+  --plan-text-color: #856404;
+  --link-color: #007bff;
+  --code-background: #e9ecef;
+  --code-text-color: #c7254e;
+  --error-color: #dc3545;
+  --error-background: #f8d7da;
+  --sidebar-section-background: #fff;
+  --sidebar-section-border: #e2e6ea;
+  --sidebar-heading-color: #333;
+  --button-disabled-background: #a0cffc; /* Lighter blue for disabled */
+}
+
+/* Dark theme variables */
+body.dark-theme {
+  --background-color: #282c34;
+  --text-color: #f8f8f2;
+  --text-color-dark: #f8f8f2;
+  --text-color-light: #b5b5b5;
+  --header-background: #20232a;
+  --header-text-color: #f8f8f2;
+  --sidebar-background: #21252b;
+  --sidebar-text-color: #f8f8f2;
+  --hover-background: #3b414b;
+  --sidebar-hover-background: #343a40;
+  --sidebar-active-background: #495057;
+  --button-background: #61dafb;
+  --button-text-color: #282c34;
+  --button-hover-background: #21a1f1;
+  --button-border: #61dafb;
+  --button-border-color: #61dafb;
+  --button-hover-border-color: #21a1f1;
+  --primary-color: #61dafb;
+  --primary-color-dark: #21a1f1;
+  --primary-color-rgb: 97, 218, 251;
+  --border-color: #444;
+  --border-color-light: #555;
+  --chat-background: #282c34;
+  --user-message-background: #3a404a;
+  --agent-message-background: #4a505c;
+  --input-background: #343a40;
+  --input-border: #555;
+  --plan-background: #3c3c1e; /* Darker yellow */
+  --plan-border: #666136;
+  --plan-text-color: #e0b400;
+  --link-color: #61dafb;
+  --code-background: #343a40;
+  --code-text-color: #e6b422;
+  --error-color: #dc3545;
+  --error-background: #5c2b2b;
+  --sidebar-section-background: #2e333d;
+  --sidebar-section-border: #444;
+  --sidebar-heading-color: #f8f8f2;
+  --button-disabled-background: #4a6f7b; /* Darker grey-blue for disabled */
+}
+
+/* Global styles for common elements */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-color);
+}
+
+a {
+  color: var(--link-color);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* Markdown specific styles */
+.markdown-content p {
+  margin-bottom: 1em;
+}
+
+.markdown-content ul, .markdown-content ol {
+  margin-left: 20px;
+  margin-bottom: 1em;
+}
+
+.markdown-content li {
+  margin-bottom: 0.5em;
+}
+
+.markdown-content code {
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  background-color: var(--code-background);
+  color: var(--code-text-color);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+}
+
+.markdown-content pre {
+  background-color: var(--code-background);
+  padding: 1em;
+  border-radius: 5px;
+  overflow-x: auto;
+  margin-bottom: 1em;
+}
+
+.markdown-content pre code {
+  background: none;
+  color: var(--text-color);
+  padding: 0;
+}
+
+.markdown-content h1, .markdown-content h2, .markdown-content h3,
+.markdown-content h4, .markdown-content h5, .markdown-content h6 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  color: var(--text-color); /* Ensure headings respect theme text color */
+}
+
+.markdown-content blockquote {
+  border-left: 4px solid var(--border-color);
+  padding-left: 1em;
+  margin-left: 0;
+  color: var(--text-color);
+  opacity: 0.8;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+}
+
+.markdown-content th, .markdown-content td {
+  border: 1px solid var(--border-color);
+  padding: 8px;
+  text-align: left;
+}
+
+.markdown-content th {
+  background-color: var(--sidebar-hover-background);
+}

@@ -1,0 +1,146 @@
+/* frontend/src/styles/App.css */
+/* Removed boilerplate. Defined core layout styles for `.App` (flex column), `.main-container` (flex row), `.header`, `.sidebar`, and `.content`. */
+
+.App {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.main-container {
+  display: flex;
+  flex: 1;
+}
+
+.header {
+  background-color: var(--header-background);
+  color: var(--header-text-color);
+  padding: 1rem 2rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.header button {
+  background: var(--button-background);
+  color: var(--button-text-color);
+  border: 1px solid var(--button-border);
+  padding: 0.5rem 1rem;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.header button:hover {
+  background-color: var(--button-hover-background);
+}
+
+.sidebar-wrapper {
+  display: flex;
+  position: relative;
+  min-width: 220px;
+  max-width: 520px;
+}
+
+.sidebar-resizer {
+  width: 6px;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.2s ease;
+}
+
+.sidebar-resizer:hover {
+  background-color: var(--sidebar-hover-background);
+}
+
+.sidebar {
+  width: 100%;
+  background-color: var(--sidebar-background);
+  color: var(--sidebar-text-color);
+  padding: 1rem 0;
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+}
+
+.sidebar-nav ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar-nav li button {
+  display: block;
+  width: 100%;
+  padding: 10px 20px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--sidebar-text-color);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.sidebar-nav li button:hover {
+  background-color: var(--sidebar-hover-background);
+}
+
+.sidebar-nav li.active button {
+  background-color: var(--sidebar-active-background);
+  font-weight: bold;
+}
+
+.sidebar-content {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.sidebar-section {
+  margin-bottom: 20px;
+  padding: 10px;
+  border-radius: 5px;
+  background-color: var(--sidebar-section-background);
+  border: 1px solid var(--sidebar-section-border);
+}
+
+.sidebar-section h3 {
+  margin-top: 0;
+  color: var(--sidebar-heading-color);
+  margin-bottom: 10px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--sidebar-section-border);
+}
+
+.content {
+  flex: 1;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .main-container {
+    flex-direction: column;
+  }
+
+  .sidebar-wrapper {
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .sidebar-resizer {
+    display: none;
+  }
+}
