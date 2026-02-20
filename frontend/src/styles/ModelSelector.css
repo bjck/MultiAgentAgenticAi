@@ -1,0 +1,43 @@
+.model-selector {
+  margin-bottom: 20px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.model-selector-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-selector label {
+  font-weight: bold;
+  color: var(--text-color);
+}
+
+.model-selector select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--input-background);
+  color: var(--text-color);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.model-selector select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(var(--primary-color-rgb), 0.2);
+}
+
+.model-selector-error {
+  color: var(--error-color);
+  padding: 10px;
+  background-color: var(--error-background);
+  border-radius: 4px;
+}

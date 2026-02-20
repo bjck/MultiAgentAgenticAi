@@ -19,7 +19,7 @@ public final class OrchestrationConstants {
     public static final Set<String> ADVISORY_ROLES = Set.of(ROLE_ANALYSIS, ROLE_DESIGN);
 
     // Operational constants
-    public static final int MAX_EXECUTION_ITERATIONS = 3;
+    public static final int MAX_EXECUTION_ITERATIONS = 15;
 
     // LLM Request Purposes
     public static final String PURPOSE_PLAN = "plan";
@@ -36,6 +36,7 @@ public final class OrchestrationConstants {
     public static final String TASK_ID_DESIGN = "design-1";
     public static final String TASK_ID_IMPLEMENTATION = "task-impl";
     public static final String TASK_ID_FALLBACK = "task-1";
+    public static final String TASK_ID_CONTEXT = "task-0-context";
     public static final String TASK_PREFIX = "task-";
 
     // Default messages and instructions
@@ -58,6 +59,8 @@ public final class OrchestrationConstants {
 
             %s
             """;
+    public static final String CONTEXT_SYNC_TASK_DESCRIPTION = "Context sync: read AGENTS.md (and frontend/AGENTS.md if relevant), then list the most relevant files/dirs to inspect for this request.";
+    public static final String CONTEXT_SYNC_TASK_EXPECTED_OUTPUT = "Summarize key guidance from AGENTS.md (and frontend/AGENTS.md if relevant) and list the top relevant files/dirs to inspect next. Do not modify files.";
 
     // Handoff schemas
     public static final String ANALYSIS_HANDOFF_SCHEMA = """
@@ -154,6 +157,7 @@ public final class OrchestrationConstants {
             Use the role skill registry to match roles to required skills.
             Order roles in likely execution order (analysis/design first, engineering next, implementer last).
             Return only JSON that matches: {"roles": ["role1", ...]}.
+            Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
             """;
 
     public static final String ROLE_SELECTION_EDITS_INSTRUCTION = "\nAlways include the engineering and implementer roles because code changes are required.\n";
@@ -170,6 +174,8 @@ public final class OrchestrationConstants {
             If the user requests code or content changes, ensure at least one task is explicitly responsible for applying file edits via MCP filesystem tools.
             Make it clear which task should write files and which should not.
             Return only JSON that matches the requested schema.
+            Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
+            The first task MUST be a context sync: read AGENTS.md (and frontend/AGENTS.md if relevant) and list the most relevant files/dirs to inspect.
 
             Role skill registry:
             %s
@@ -186,6 +192,7 @@ public final class OrchestrationConstants {
             Do NOT include analysis or design tasks; those are already complete.
             If the work is complete, return an empty tasks array.
             Return only JSON that matches the requested schema.
+            Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
             """;
 
     public static final String EXECUTION_REVIEW_EDITS_INSTRUCTION = "\nIf edits are still required, ensure implementer tasks perform them.\n";
@@ -199,6 +206,7 @@ public final class OrchestrationConstants {
             If the task does not explicitly instruct file edits, do not write files.
             Only the implementer role should apply file edits.
             If assumptions are required, list them explicitly.
+            Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
             """;
 
     public static final String WORKER_EDITS_INSTRUCTION = """
@@ -210,6 +218,7 @@ public final class OrchestrationConstants {
             You are the synthesis agent. Combine worker outputs into a single, coherent response.
             Resolve conflicts, remove duplication, and answer the user's request directly.
             If MCP tool output was used, summarize relevant file changes accurately.
+            Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
             """;
 
     public static final String COLLABORATION_SYSTEM_PROMPT = """
@@ -218,6 +227,7 @@ public final class OrchestrationConstants {
             Resolve conflicts, deduplicate, and surface key insights and open questions.
             Keep it concise and actionable.
             Follow any stage-specific instructions provided below.
+            Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
             """;
 
     // User Templates
@@ -246,6 +256,9 @@ public final class OrchestrationConstants {
 
             Context:
             {context}
+
+            Errors encountered:
+            {errors}
 
             Current plan:
             {plan}
