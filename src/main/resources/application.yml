@@ -56,6 +56,13 @@ multiagent:
   max-tasks: 4
   worker-concurrency: 4
   worker-timeout: 90s
+  role-execution-defaults:
+    rounds: 1
+    agents: 1
+  role-execution:
+    analysis:
+      rounds: 2
+      agents: 4
   workspace-root: ${WORKSPACE_ROOT:${user.dir}}
   ai-provider: ${AI_PROVIDER:GOOGLE}
   google:

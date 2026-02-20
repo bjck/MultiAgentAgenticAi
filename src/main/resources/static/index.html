@@ -67,6 +67,10 @@
           </div>
           <label for="chat-input">Describe the feature you want to build</label>
           <textarea id="chat-input" placeholder="Build a login flow with email verification and update the docs."></textarea>
+          <div class="agent-status">
+            <span class="label">Active agents</span>
+            <span id="active-agents">None</span>
+          </div>
           <div class="chat-actions">
             <button type="button" id="preview-plan">Preview Plan</button>
             <button type="submit" id="send-chat">Run Agents</button>
@@ -98,6 +102,7 @@
             <button class="tab" data-tab="synthesis">Synthesis</button>
             <button class="tab" data-tab="worker-defaults">Worker Defaults</button>
             <button class="tab" data-tab="workers">Worker Roles</button>
+            <button class="tab" data-tab="role-settings">Role Settings</button>
           </div>
           <div class="skills-content">
             <div id="skills-orchestrator" class="skills-panel active">
@@ -119,6 +124,14 @@
               </div>
               <div class="skills-list" id="worker-role-skills"></div>
               <button id="add-worker-role-skill" class="add-skill">+ Add Skill</button>
+            </div>
+            <div id="skills-role-settings" class="skills-panel">
+              <div class="role-settings-header">
+                <h3>Execution Settings</h3>
+                <button id="save-role-settings" class="ghost">Save</button>
+              </div>
+              <div class="role-settings-defaults" id="role-settings-defaults"></div>
+              <div class="role-settings-list" id="role-settings-list"></div>
             </div>
           </div>
         </section>

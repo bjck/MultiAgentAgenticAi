@@ -12,6 +12,8 @@ public class MultiAgentProperties {
     private int maxTasks = 4;
     private int workerConcurrency = 4;
     private Duration workerTimeout = Duration.ofSeconds(90);
+    private RoleExecutionConfig roleExecutionDefaults = new RoleExecutionConfig();
+    private java.util.Map<String, RoleExecutionConfig> roleExecution = new java.util.HashMap<>();
     private List<String> workerRoles = new ArrayList<>(
             List.of("analysis", "research", "design", "engineering", "qa", "writing", "general"));
     private String workspaceRoot;
@@ -86,6 +88,67 @@ public class MultiAgentProperties {
 
     public void setWorkerConcurrency(int workerConcurrency) {
         this.workerConcurrency = workerConcurrency;
+    }
+
+    public RoleExecutionConfig getRoleExecutionDefaults() {
+        return roleExecutionDefaults;
+    }
+
+    public void setRoleExecutionDefaults(RoleExecutionConfig roleExecutionDefaults) {
+        this.roleExecutionDefaults = roleExecutionDefaults != null ? roleExecutionDefaults : new RoleExecutionConfig();
+    }
+
+    public java.util.Map<String, RoleExecutionConfig> getRoleExecution() {
+        return roleExecution;
+    }
+
+    public void setRoleExecution(java.util.Map<String, RoleExecutionConfig> roleExecution) {
+        if (roleExecution == null) {
+            return;
+        }
+        this.roleExecution = new java.util.HashMap<>(roleExecution);
+    }
+
+    public RoleExecutionConfig getRoleExecutionConfig(String role) {
+        RoleExecutionConfig base = roleExecutionDefaults != null ? roleExecutionDefaults : new RoleExecutionConfig();
+        if (role == null) {
+            return new RoleExecutionConfig(base.getRounds(), base.getAgents());
+        }
+        RoleExecutionConfig override = roleExecution.get(role.toLowerCase());
+        if (override == null) {
+            return new RoleExecutionConfig(base.getRounds(), base.getAgents());
+        }
+        int rounds = override.getRounds() > 0 ? override.getRounds() : base.getRounds();
+        int agents = override.getAgents() > 0 ? override.getAgents() : base.getAgents();
+        return new RoleExecutionConfig(rounds, agents);
+    }
+
+    public static class RoleExecutionConfig {
+        private int rounds = 1;
+        private int agents = 1;
+
+        public RoleExecutionConfig() {}
+
+        public RoleExecutionConfig(int rounds, int agents) {
+            this.rounds = rounds;
+            this.agents = agents;
+        }
+
+        public int getRounds() {
+            return rounds;
+        }
+
+        public void setRounds(int rounds) {
+            this.rounds = rounds;
+        }
+
+        public int getAgents() {
+            return agents;
+        }
+
+        public void setAgents(int agents) {
+            this.agents = agents;
+        }
     }
 
     public Duration getWorkerTimeout() {

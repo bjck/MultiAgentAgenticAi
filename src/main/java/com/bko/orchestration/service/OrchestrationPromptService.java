@@ -56,6 +56,13 @@ public class OrchestrationPromptService {
         return appendWorkspaceContext(basePrompt);
     }
 
+    public String collaborationSystemPrompt(String role) {
+        String basePrompt = COLLABORATION_SYSTEM_PROMPT.formatted(role);
+        List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
+        basePrompt = appendSkillsToPrompt(basePrompt, skills);
+        return appendWorkspaceContext(basePrompt);
+    }
+
     private String appendWorkspaceContext(String basePrompt) {
         return basePrompt + "\n\n" + contextService.buildWorkspaceContext();
     }

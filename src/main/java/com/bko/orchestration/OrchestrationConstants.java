@@ -149,6 +149,13 @@ public final class OrchestrationConstants {
             If MCP tool output was used, summarize relevant file changes accurately.
             """;
 
+    public static final String COLLABORATION_SYSTEM_PROMPT = """
+            You are the collaboration lead for %s agents.
+            Combine the agents' findings into a single best answer for this stage.
+            Resolve conflicts, deduplicate, and surface key insights and open questions.
+            Keep it concise and actionable.
+            """;
+
     // User Templates
     public static final String ORCHESTRATOR_USER_TEMPLATE = """
             User request:
@@ -205,6 +212,20 @@ public final class OrchestrationConstants {
             {plan}
 
             Worker outputs:
+            {results}
+            """;
+
+    public static final String COLLABORATION_USER_TEMPLATE = """
+            User request:
+            {input}
+
+            Stage task:
+            {task}
+
+            Round:
+            {round}
+
+            Agent outputs:
             {results}
             """;
 }

@@ -277,6 +277,31 @@ input[type="text"] {
   gap: 12px;
 }
 
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--muted);
+  background: #f3f1ed;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px 10px;
+}
+
+.agent-status .label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+}
+
+#active-agents {
+  font-weight: 600;
+  color: var(--accent-strong);
+  word-break: break-word;
+}
+
 button {
   border: none;
   background: var(--accent);
@@ -525,6 +550,50 @@ button.tool-button.active:hover {
   gap: 10px;
   max-height: 300px;
   overflow-y: auto;
+}
+
+.role-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.role-settings-defaults,
+.role-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.role-setting-card {
+  background: #faf9f7;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.role-setting-card h4 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.role-setting-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.role-setting-grid label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.role-setting-grid input {
+  width: 100%;
 }
 
 .skill-card {
@@ -869,6 +938,11 @@ button.tool-button.active:hover {
   margin-bottom: 12px;
 }
 
+.worker-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.2);
+}
+
 .worker-heading {
   display: flex;
   align-items: center;
@@ -878,10 +952,18 @@ button.tool-button.active:hover {
   border-bottom: 1px solid var(--border);
 }
 
+.worker-heading .worker-status {
+  font-size: 12px;
+  color: var(--muted);
+  background: #f1eee7;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: auto;
+}
+
 .worker-heading .task-id {
   color: var(--muted);
   font-size: 12px;
-  margin-left: auto;
 }
 
 /* Chat actions button styling */
@@ -1070,6 +1152,21 @@ button.tool-button.active:hover {
 
 [data-theme='dark'] .agent-feedback {
   background-color: #3b506b;
+  color: var(--muted);
+}
+
+[data-theme='dark'] .agent-status {
+  background: #4a5568;
+  border-color: var(--border);
+}
+
+[data-theme='dark'] .role-setting-card {
+  background: #2d3748;
+  border-color: var(--border);
+}
+
+[data-theme='dark'] .worker-heading .worker-status {
+  background: #4a5568;
   color: var(--muted);
 }
 
