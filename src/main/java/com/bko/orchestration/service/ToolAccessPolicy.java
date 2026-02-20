@@ -50,8 +50,11 @@ public class ToolAccessPolicy {
         }
         // Worker defaults by role
         String normalizedRole = role == null ? "" : role.trim().toLowerCase(Locale.ROOT);
-        if (ROLE_ENGINEERING.equals(normalizedRole)) {
+        if (ROLE_IMPLEMENTER.equals(normalizedRole)) {
             return List.of("list_directory", "read_file", "write_file");
+        }
+        if (ROLE_ENGINEERING.equals(normalizedRole)) {
+            return List.of("list_directory", "read_file");
         }
         if (ROLE_ANALYSIS.equals(normalizedRole)) {
             return List.of("list_directory", "read_file");

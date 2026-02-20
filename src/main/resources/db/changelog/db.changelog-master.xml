@@ -6,5 +6,6 @@
 
     <include file="db/changelog/01-create-schema.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/02-add-orchestration-logging.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/03-add-tool-call-logging.xml" relativeToChangelogFile="false"/>
 
 </databaseChangeLog>

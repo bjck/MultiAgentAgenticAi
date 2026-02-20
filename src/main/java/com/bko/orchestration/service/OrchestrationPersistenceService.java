@@ -19,6 +19,7 @@ public class OrchestrationPersistenceService {
     private final OrchestratorPlanLogRepository planLogRepository;
     private final TaskLogRepository taskLogRepository;
     private final WorkerResultLogRepository workerResultLogRepository;
+    private final ToolCallLogRepository toolCallLogRepository;
 
     public OrchestrationSession startSession(String userPrompt, @Nullable String provider, @Nullable String model) {
         OrchestrationSession session = OrchestrationSession.builder()
@@ -89,6 +90,19 @@ public class OrchestrationPersistenceService {
                 .output(output)
                 .build();
         return workerResultLogRepository.save(wr);
+    }
+
+    public ToolCallLog logToolCall(OrchestrationSession session, @Nullable TaskLog taskLog, @Nullable String role,
+                                   String toolName, @Nullable String toolInput, @Nullable String toolOutput) {
+        ToolCallLog log = ToolCallLog.builder()
+                .session(session)
+                .taskLog(taskLog)
+                .role(role)
+                .toolName(toolName)
+                .toolInput(toolInput)
+                .toolOutput(toolOutput)
+                .build();
+        return toolCallLogRepository.save(log);
     }
 
     private String fillTemplate(String template, Map<String, String> params) {

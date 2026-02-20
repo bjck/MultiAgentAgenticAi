@@ -1,5 +1,6 @@
 package com.bko.config;
 
+import com.bko.orchestration.collaboration.CollaborationStrategy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,7 +16,7 @@ public class MultiAgentProperties {
     private RoleExecutionConfig roleExecutionDefaults = new RoleExecutionConfig();
     private java.util.Map<String, RoleExecutionConfig> roleExecution = new java.util.HashMap<>();
     private List<String> workerRoles = new ArrayList<>(
-            List.of("analysis", "research", "design", "engineering", "qa", "writing", "general"));
+            List.of("analysis", "research", "design", "engineering", "implementer", "qa", "writing", "general"));
     private String workspaceRoot;
     private AgentSkillsConfig skills = new AgentSkillsConfig();
     private AgentToolsConfig tools = new AgentToolsConfig();
@@ -112,26 +113,38 @@ public class MultiAgentProperties {
     public RoleExecutionConfig getRoleExecutionConfig(String role) {
         RoleExecutionConfig base = roleExecutionDefaults != null ? roleExecutionDefaults : new RoleExecutionConfig();
         if (role == null) {
-            return new RoleExecutionConfig(base.getRounds(), base.getAgents());
+            return new RoleExecutionConfig(base.getRounds(), base.getAgents(), base.getCollaborationStrategy());
         }
         RoleExecutionConfig override = roleExecution.get(role.toLowerCase());
         if (override == null) {
-            return new RoleExecutionConfig(base.getRounds(), base.getAgents());
+            return new RoleExecutionConfig(base.getRounds(), base.getAgents(), base.getCollaborationStrategy());
         }
         int rounds = override.getRounds() > 0 ? override.getRounds() : base.getRounds();
         int agents = override.getAgents() > 0 ? override.getAgents() : base.getAgents();
-        return new RoleExecutionConfig(rounds, agents);
+        CollaborationStrategy strategy = override.getCollaborationStrategy() != null
+                ? override.getCollaborationStrategy()
+                : base.getCollaborationStrategy();
+        return new RoleExecutionConfig(rounds, agents, strategy);
     }
 
     public static class RoleExecutionConfig {
         private int rounds = 1;
         private int agents = 1;
+        private CollaborationStrategy collaborationStrategy = CollaborationStrategy.SIMPLE_SUMMARY;
 
         public RoleExecutionConfig() {}
 
         public RoleExecutionConfig(int rounds, int agents) {
             this.rounds = rounds;
             this.agents = agents;
+        }
+
+        public RoleExecutionConfig(int rounds, int agents, CollaborationStrategy collaborationStrategy) {
+            this.rounds = rounds;
+            this.agents = agents;
+            this.collaborationStrategy = collaborationStrategy != null
+                    ? collaborationStrategy
+                    : CollaborationStrategy.SIMPLE_SUMMARY;
         }
 
         public int getRounds() {
@@ -148,6 +161,17 @@ public class MultiAgentProperties {
 
         public void setAgents(int agents) {
             this.agents = agents;
+        }
+
+        public CollaborationStrategy getCollaborationStrategy() {
+            return collaborationStrategy;
+        }
+
+        public void setCollaborationStrategy(CollaborationStrategy collaborationStrategy) {
+            if (collaborationStrategy == null) {
+                return;
+            }
+            this.collaborationStrategy = collaborationStrategy;
         }
     }
 

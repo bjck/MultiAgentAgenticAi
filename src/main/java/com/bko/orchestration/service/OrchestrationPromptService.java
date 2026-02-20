@@ -3,6 +3,8 @@ package com.bko.orchestration.service;
 import static com.bko.orchestration.OrchestrationConstants.*;
 import com.bko.config.AgentSkill;
 import com.bko.config.MultiAgentProperties;
+import com.bko.orchestration.collaboration.CollaborationStage;
+import com.bko.orchestration.collaboration.CollaborationStrategy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -41,13 +43,16 @@ public class OrchestrationPromptService {
         return appendWorkspaceContext(basePrompt);
     }
 
-    public String workerSystemPrompt(String role, boolean requiresEdits) {
+    public String workerSystemPrompt(String role, boolean requiresEdits, boolean includeHandoffSchema) {
         String basePrompt = WORKER_SYSTEM_PROMPT.formatted(role);
         if (requiresEdits) {
             basePrompt = basePrompt + WORKER_EDITS_INSTRUCTION;
         }
         List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
         basePrompt = appendSkillsToPrompt(basePrompt, skills);
+        if (includeHandoffSchema) {
+            basePrompt = appendHandoffSchema(basePrompt, role);
+        }
         return appendWorkspaceContext(basePrompt);
     }
 
@@ -56,10 +61,19 @@ public class OrchestrationPromptService {
         return appendWorkspaceContext(basePrompt);
     }
 
-    public String collaborationSystemPrompt(String role) {
+    public String collaborationSystemPrompt(String role, CollaborationStrategy strategy, CollaborationStage stage, boolean finalStage) {
         String basePrompt = COLLABORATION_SYSTEM_PROMPT.formatted(role);
+        if (strategy != null) {
+            basePrompt = basePrompt + "\n\nStrategy: " + strategy.label();
+        }
+        if (stage != null && StringUtils.hasText(stage.summaryInstruction())) {
+            basePrompt = basePrompt + "\n\n" + stage.summaryInstruction().trim();
+        }
         List<AgentSkill> skills = properties.getSkills().getSkillsForWorkerRole(role);
         basePrompt = appendSkillsToPrompt(basePrompt, skills);
+        if (finalStage) {
+            basePrompt = appendFinalStageHandoffSchema(basePrompt, role);
+        }
         return appendWorkspaceContext(basePrompt);
     }
 
@@ -84,5 +98,35 @@ public class OrchestrationPromptService {
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+    private String appendHandoffSchema(String basePrompt, String role) {
+        String schema = handoffSchemaForRole(role);
+        if (!StringUtils.hasText(schema)) {
+            return basePrompt;
+        }
+        return basePrompt + "\n\nReturn only JSON that matches this handoff schema:\n" + schema;
+    }
+
+    private String appendFinalStageHandoffSchema(String basePrompt, String role) {
+        String schema = handoffSchemaForRole(role);
+        if (!StringUtils.hasText(schema)) {
+            return basePrompt;
+        }
+        return basePrompt + "\n\nFinal stage output must return only JSON that matches this handoff schema:\n" + schema;
+    }
+
+    private String handoffSchemaForRole(String role) {
+        if (!StringUtils.hasText(role)) {
+            return null;
+        }
+        String normalized = role.trim().toLowerCase();
+        return switch (normalized) {
+            case ROLE_ANALYSIS -> ANALYSIS_HANDOFF_SCHEMA;
+            case ROLE_DESIGN -> DESIGN_HANDOFF_SCHEMA;
+            case ROLE_ENGINEERING -> ENGINEERING_HANDOFF_SCHEMA;
+            case ROLE_IMPLEMENTER -> IMPLEMENTER_HANDOFF_SCHEMA;
+            default -> null;
+        };
     }
 }

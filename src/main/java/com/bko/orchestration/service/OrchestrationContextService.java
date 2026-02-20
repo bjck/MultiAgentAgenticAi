@@ -61,12 +61,25 @@ public class OrchestrationContextService {
         if (results == null || results.isEmpty()) {
             return "";
         }
+        List<WorkerResult> deduped = dedupeLatestByTask(results);
         StringBuilder sb = new StringBuilder();
-        for (WorkerResult result : results) {
+        for (WorkerResult result : deduped) {
             sb.append("[").append(result.role()).append(" - ").append(result.taskId()).append("]\n");
             sb.append(result.output()).append("\n\n");
         }
         return sb.toString().trim();
+    }
+
+    private List<WorkerResult> dedupeLatestByTask(List<WorkerResult> results) {
+        java.util.LinkedHashMap<String, WorkerResult> map = new java.util.LinkedHashMap<>();
+        for (WorkerResult result : results) {
+            String key = result.taskId();
+            if (map.containsKey(key)) {
+                map.remove(key);
+            }
+            map.put(key, result);
+        }
+        return new java.util.ArrayList<>(map.values());
     }
 
     public String mergeContexts(String base, String addition) {

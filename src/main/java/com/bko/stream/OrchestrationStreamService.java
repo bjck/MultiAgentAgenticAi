@@ -27,6 +27,10 @@ public class OrchestrationStreamService {
         hub.emit(runId, "status", Map.of("message", message));
     }
 
+    public void emitSession(String runId, String sessionId) {
+        hub.emit(runId, "session", Map.of("sessionId", sessionId));
+    }
+
     public void emitPlan(String runId, OrchestratorPlan plan) {
         hub.emit(runId, "plan", plan);
     }
