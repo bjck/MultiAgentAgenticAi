@@ -885,12 +885,12 @@ public class OrchestratorService {
         List<TaskSpec> sanitized = new ArrayList<>(maxTasks + 1);
         List<String> normalizedRoles = normalizeAllowedRoles(allowedRoles);
         TaskSpec contextTask = null;
-        IntStream.range(0, maxTasks).forEach(index -> {
+        for (int index = 0; index < maxTasks; index++) {
             TaskSpec task = incomingTasks.get(index);
             String role = normalizeRole(task.role(), normalizedRoles);
             if (excludeAdvisory && ADVISORY_ROLES.contains(role)) {
                 if (!TASK_ID_CONTEXT.equalsIgnoreCase(task.id())) {
-                    return;
+                    continue;
                 }
             }
             String id = StringUtils.hasText(task.id()) ? task.id() : TASK_PREFIX + (index + 1);
@@ -908,7 +908,7 @@ public class OrchestratorService {
             } else {
                 sanitized.add(normalizedTask);
             }
-        });
+        }
         if (contextTask == null) {
             String contextRole = normalizedRoles.contains(ROLE_ANALYSIS)
                     ? ROLE_ANALYSIS
