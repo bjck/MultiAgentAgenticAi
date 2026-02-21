@@ -3,10 +3,10 @@ import { useWebSocket } from '../context/WebSocketProvider';
 import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
 import PlanPreview from './PlanPreview';
-import '../styles/ChatContainer.css'; // We will create this CSS file next
+import '../styles/ChatContainer.css';
 
 const ChatContainer = () => {
-  const { messages, plan } = useWebSocket();
+  const { messages, plan, isAgentWorking } = useWebSocket();
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -15,7 +15,7 @@ const ChatContainer = () => {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isAgentWorking]); // Added isAgentWorking to dependencies to scroll when spinner appears/disappears
 
   return (
     <div className="chat-container">
@@ -24,6 +24,11 @@ const ChatContainer = () => {
         {messages.map((msg, index) => (
           <ChatMessage key={index} message={msg} />
         ))}
+        {isAgentWorking && (
+          <div className="agent-spinner-container">
+            <div className="agent-spinner"></div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
       <ChatInput />
