@@ -1,45 +1,44 @@
 .chat-message {
   display: flex;
   margin-bottom: 10px;
+  max-width: 70%; /* Limit message bubble width */
 }
 
 .user-message {
-  justify-content: flex-end;
+  margin-left: auto; /* Pushes user messages to the right */
 }
 
 .agent-message {
-  justify-content: flex-start;
+  margin-right: auto; /* Pushes agent messages to the left */
 }
 
 .system-message {
-  justify-content: center;
+  margin-left: auto;
+  margin-right: auto; /* Centers system messages */
+  text-align: center;
 }
 
 .message-content {
-  max-width: 70%;
   padding: 10px 15px;
   border-radius: 20px;
   line-height: 1.5;
   word-wrap: break-word;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
 }
 
 .user-message .message-content {
   background-color: var(--user-message-background);
   color: var(--text-color);
-  border-bottom-right-radius: 2px;
 }
 
 .agent-message .message-content {
   background-color: var(--agent-message-background);
   color: var(--text-color);
-  border-bottom-left-radius: 2px;
 }
 
 .system-message .message-content {
   background-color: var(--plan-background);
   color: var(--plan-text-color);
-  border-radius: 8px;
-  font-size: 0.9em;
 }
 
 .message-content p {
@@ -83,4 +82,19 @@
 
 .message-content a:hover {
   text-decoration: underline;
+}
+
+.toggle-button {
+  background: none;
+  border: none;
+  color: var(--link-color);
+  cursor: pointer;
+  font-size: 0.9em;
+  margin-top: 5px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.toggle-button:hover {
+  color: var(--link-color-hover);
 }

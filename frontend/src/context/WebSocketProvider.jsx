@@ -21,6 +21,7 @@ export const WebSocketProvider = ({ children }) => {
   const [sessionId, setSessionId] = useState('');
   const [selectedProvider, setSelectedProvider] = useState('GOOGLE');
   const [selectedModel, setSelectedModel] = useState('');
+  const [isAgentWorking, setIsAgentWorking] = useState(false); // New state for agent activity
   const wsRef = useRef(null);
   const runIdRef = useRef(null);
   const taskBuffers = useRef(new Map());
@@ -73,10 +74,12 @@ export const WebSocketProvider = ({ children }) => {
       if (text) {
         appendMessage({ type: 'agent', content: text });
       }
+      setIsAgentWorking(false); // Agent finished working
       return;
     }
     if (type === 'error') {
       appendMessage({ type: 'system', content: data?.message || 'Unknown error.' });
+      setIsAgentWorking(false); // Agent finished working with an error
     }
   };
 
@@ -110,6 +113,7 @@ export const WebSocketProvider = ({ children }) => {
     if (!trimmed) return;
     appendMessage({ type: 'user', content: trimmed });
     resetForNewRequest();
+    setIsAgentWorking(true); // Agent starts working
 
     const payload = {
       message: trimmed,
@@ -126,6 +130,7 @@ export const WebSocketProvider = ({ children }) => {
 
       if (!response.ok) {
         appendMessage({ type: 'system', content: `Failed to start run (${response.status}).` });
+        setIsAgentWorking(false); // Agent finished working with an error
         return;
       }
 
@@ -134,9 +139,11 @@ export const WebSocketProvider = ({ children }) => {
         connectToRun(data.runId);
       } else {
         appendMessage({ type: 'system', content: 'Missing run ID from server.' });
+        setIsAgentWorking(false); // Agent finished working with an error
       }
     } catch (e) {
       appendMessage({ type: 'system', content: `Failed to start run: ${e.message}` });
+      setIsAgentWorking(false); // Agent finished working with an error
     }
   };
 
@@ -145,6 +152,7 @@ export const WebSocketProvider = ({ children }) => {
     if (!trimmed) return;
     appendMessage({ type: 'user', content: trimmed });
     resetForNewRequest();
+    setIsAgentWorking(true); // Agent starts working
 
     const payload = {
       message: trimmed,
@@ -160,6 +168,7 @@ export const WebSocketProvider = ({ children }) => {
       });
       if (!response.ok) {
         appendMessage({ type: 'system', content: `Failed to run (${response.status}).` });
+        setIsAgentWorking(false); // Agent finished working with an error
         return;
       }
       const data = await response.json();
@@ -169,8 +178,10 @@ export const WebSocketProvider = ({ children }) => {
       if (data?.finalAnswer) {
         appendMessage({ type: 'agent', content: data.finalAnswer });
       }
+      setIsAgentWorking(false); // Agent finished working
     } catch (e) {
       appendMessage({ type: 'system', content: `Failed to run: ${e.message}` });
+      setIsAgentWorking(false); // Agent finished working with an error
     }
   };
 
@@ -179,6 +190,7 @@ export const WebSocketProvider = ({ children }) => {
     if (!trimmed) return;
     appendMessage({ type: 'user', content: trimmed });
     resetForNewRequest();
+    setIsAgentWorking(true); // Agent starts working
 
     const payload = {
       message: trimmed,
@@ -194,14 +206,17 @@ export const WebSocketProvider = ({ children }) => {
       });
       if (!response.ok) {
         appendMessage({ type: 'system', content: `Failed to plan (${response.status}).` });
+        setIsAgentWorking(false); // Agent finished working with an error
         return;
       }
       const data = await response.json();
       if (data?.objective || data?.tasks) {
         setPlan(formatPlan({ objective: data.objective, tasks: data.tasks }));
       }
+      setIsAgentWorking(false); // Agent finished working
     } catch (e) {
       appendMessage({ type: 'system', content: `Failed to plan: ${e.message}` });
+      setIsAgentWorking(false); // Agent finished working with an error
     }
   };
 
@@ -211,6 +226,7 @@ export const WebSocketProvider = ({ children }) => {
     setSessionId('');
     taskBuffers.current.clear();
     closeSocket();
+    setIsAgentWorking(false); // Ensure spinner is off when chat is cleared
   };
 
   const value = {
@@ -225,6 +241,7 @@ export const WebSocketProvider = ({ children }) => {
     setSelectedProvider,
     selectedModel,
     setSelectedModel,
+    isAgentWorking, // Expose isAgentWorking state
   };
 
   return (
