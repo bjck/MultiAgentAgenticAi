@@ -7,6 +7,7 @@ import com.bko.orchestration.collaboration.CollaborationStrategy;
 import com.bko.orchestration.collaboration.CollaborationStrategyService;
 import com.bko.orchestration.model.OrchestrationResult;
 import com.bko.orchestration.model.OrchestratorPlan;
+import com.bko.orchestration.model.PlanDraft;
 import com.bko.orchestration.model.RoleSelection;
 import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.WorkerResult;
@@ -36,6 +37,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import com.bko.entity.OrchestrationSession;
+import com.bko.entity.OrchestratorPlanLog;
 import com.bko.entity.TaskLog;
 import com.bko.orchestration.service.OrchestrationPersistenceService;
 
@@ -86,6 +88,12 @@ public class OrchestratorService {
 
     private record AdvisoryBundle(List<TaskSpec> tasks, List<WorkerResult> results) {
         private AdvisoryBundle() {
+            this(List.of(), List.of());
+        }
+    }
+
+    private record DiscoveryBundle(List<TaskSpec> tasks, List<WorkerResult> results) {
+        private DiscoveryBundle() {
             this(List.of(), List.of());
         }
     }
@@ -160,6 +168,9 @@ public class OrchestratorService {
                 streamService.emitSession(streamId, session.getId().toString());
                 streamService.emitStatus(streamId, "Starting orchestration");
             }
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                return new OrchestrationResult(new OrchestratorPlan(userMessage, List.of()), List.of(), "Cancelled.");
+            }
             boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
             if (streamId != null) {
                 streamService.emitStatus(streamId, "Selecting roles");
@@ -175,7 +186,8 @@ public class OrchestratorService {
                 if (streamId != null) {
                     streamService.emitTaskStart(streamId, contextTask);
                 }
-                WorkerResult contextResult = runWorker(session, userMessage, contextTask, false, null, provider, model, false, null, streamId);
+                WorkerResult contextResult = runWorker(session, userMessage, contextTask, false, null, provider, model,
+                        false, false, null, streamId);
                 advisoryResults.add(contextResult);
                 contextSyncContext = orchestrationContextService.buildResultsContext(List.of(contextResult));
             }
@@ -195,7 +207,8 @@ public class OrchestratorService {
                 if (streamId != null) {
                     streamService.emitTaskStart(streamId, designTask);
                 }
-                advisoryResults.add(runWorker(session, userMessage, designTask, requiresEdits, designContext, provider, model, true, null, streamId));
+                advisoryResults.add(runWorker(session, userMessage, designTask, requiresEdits, designContext, provider, model,
+                        true, false, null, streamId));
             }
 
             if (!advisoryTasks.isEmpty()) {
@@ -225,6 +238,9 @@ public class OrchestratorService {
             OrchestratorPlan currentPlan = initialPlan;
             int iteration = 0;
             while (iteration < MAX_EXECUTION_ITERATIONS && currentPlan != null && !currentPlan.tasks().isEmpty()) {
+                if (handleCancellation(streamId, session, "Cancelled")) {
+                    return new OrchestrationResult(new OrchestratorPlan(userMessage, allTasks), allResults, "Cancelled.");
+                }
                 log.info("Executing plan iteration {} with {} tasks.", iteration + 1, currentPlan.tasks().size());
                 if (streamId != null) {
                     streamService.emitStatus(streamId, "Executing tasks (iteration " + (iteration + 1) + ")");
@@ -276,18 +292,105 @@ public class OrchestratorService {
         }
     }
 
-    public OrchestratorPlan plan(String userMessage, String provider, String model) {
+    public PlanDraft plan(String userMessage, String provider, String model) {
+        return planInternal(userMessage, provider, model, null);
+    }
+
+    public PlanDraft planStreaming(String userMessage, String provider, String model, String streamId) {
+        return planInternal(userMessage, provider, model, streamId);
+    }
+
+    private PlanDraft planInternal(String userMessage, String provider, String model, @Nullable String streamId) {
         OrchestrationSession session = persistenceService.startSession(userMessage, provider, model);
         currentSession.set(session);
         try {
+            if (streamId != null) {
+                streamService.emitSession(streamId, session.getId().toString());
+                streamService.emitStatus(streamId, "Starting discovery");
+            }
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                OrchestratorPlan emptyPlan = new OrchestratorPlan(userMessage, List.of());
+                return new PlanDraft("", session.getId().toString(), emptyPlan, List.of(), "CANCELLED");
+            }
             boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
-            List<String> selectedRoles = selectRoles(userMessage, requiresEdits, null, provider, model);
-            OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, selectedRoles, null, provider, model);
+            DiscoveryBundle discovery = runDiscovery(session, userMessage, provider, model, streamId);
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                OrchestratorPlan emptyPlan = new OrchestratorPlan(userMessage, List.of());
+                return new PlanDraft("", session.getId().toString(), emptyPlan, discovery.results(), "CANCELLED");
+            }
+            String discoveryContext = orchestrationContextService.buildResultsContext(discovery.results());
+
+            if (streamId != null) {
+                streamService.emitStatus(streamId, "Generating task plan");
+            }
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                OrchestratorPlan emptyPlan = new OrchestratorPlan(userMessage, List.of());
+                return new PlanDraft("", session.getId().toString(), emptyPlan, discovery.results(), "CANCELLED");
+            }
+            List<String> selectedRoles = selectRoles(userMessage, requiresEdits, discoveryContext, provider, model);
+            OrchestratorPlan rawPlan = requestPlan(userMessage, requiresEdits, selectedRoles, discoveryContext, provider, model);
             OrchestratorPlan sanitized = sanitizePlan(rawPlan, userMessage, requiresEdits, selectedRoles, false, false);
-            var planLog = persistenceService.logPlan(session, sanitized, true);
+            OrchestratorPlanLog planLog = persistenceService.logPlan(session, sanitized, true);
             persistenceService.logTasks(planLog, sanitized.tasks());
-            persistenceService.completeSession(session, null, "PLANNED");
-            return sanitized;
+            persistenceService.completeSession(session, null, "AWAITING_APPROVAL");
+
+            PlanDraft draft = new PlanDraft(planLog.getId().toString(), session.getId().toString(),
+                    sanitized, discovery.results(), "AWAITING_APPROVAL");
+            if (streamId != null) {
+                streamService.emitPlanDraft(streamId, draft);
+                streamService.emitStatus(streamId, "Awaiting approval");
+                streamService.emitRunComplete(streamId, "AWAITING_APPROVAL");
+            }
+            return draft;
+        } finally {
+            currentSession.remove();
+        }
+    }
+
+    public OrchestrationResult executePlan(String planId, @Nullable String feedback, String provider, String model) {
+        return executePlanInternal(planId, feedback, provider, model, null);
+    }
+
+    public OrchestrationResult executePlanStreaming(String planId, @Nullable String feedback, String provider, String model,
+                                                    String streamId) {
+        return executePlanInternal(planId, feedback, provider, model, streamId);
+    }
+
+    private OrchestrationResult executePlanInternal(String planId, @Nullable String feedback, String provider, String model,
+                                                    @Nullable String streamId) {
+        OrchestratorPlanLog planLog = persistenceService.findPlanWithTasks(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown planId: " + planId));
+        OrchestrationSession session = planLog.getSession();
+        currentSession.set(session);
+        try {
+            if (streamId != null) {
+                streamService.emitSession(streamId, session.getId().toString());
+                streamService.emitStatus(streamId, "Executing approved plan");
+            }
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                OrchestratorPlan cancelledPlan = planFromLog(planLog);
+                return new OrchestrationResult(cancelledPlan, List.of(), "Cancelled.");
+            }
+            String userMessage = session.getUserPrompt();
+            if (StringUtils.hasText(feedback)) {
+                userMessage = userMessage + "\n\nUser feedback:\n" + feedback.trim();
+            }
+            boolean requiresEdits = fileEditDetectionService.requiresFileEdits(session.getUserPrompt());
+            OrchestratorPlan plan = planFromLog(planLog);
+            Map<String, TaskLog> taskIndex = taskIndexFromPlanLog(planLog);
+            List<WorkerResult> results = executeApprovedPlanTasks(session, userMessage, plan.tasks(),
+                    requiresEdits, provider, model, taskIndex, streamId);
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                return new OrchestrationResult(plan, results, "Cancelled.");
+            }
+            String finalAnswer = synthesize(session, userMessage, plan, results, provider, model);
+            persistenceService.completeSession(session, finalAnswer, "COMPLETED");
+            if (streamId != null) {
+                streamService.emitFinalAnswer(streamId, finalAnswer);
+                streamService.emitRunComplete(streamId, "COMPLETED");
+            }
+            logSummary();
+            return new OrchestrationResult(plan, results, finalAnswer);
         } finally {
             currentSession.remove();
         }
@@ -439,6 +542,27 @@ public class OrchestratorService {
         }
     }
 
+    private DiscoveryBundle runDiscovery(OrchestrationSession session, String userMessage,
+                                         String provider, String model, @Nullable String streamId) {
+        TaskSpec discoveryTask = buildDiscoveryTask();
+        if (streamId != null) {
+            streamService.emitTaskStart(streamId, discoveryTask);
+        }
+        if (isCancelled(streamId)) {
+            WorkerResult cancelled = cancelledResult(discoveryTask, streamId);
+            return new DiscoveryBundle(List.of(discoveryTask), List.of(cancelled));
+        }
+        WorkerResult result = runWorker(session, userMessage, discoveryTask, false, null, provider, model,
+                false, true, null, streamId);
+        return new DiscoveryBundle(List.of(discoveryTask), List.of(result));
+    }
+
+    private TaskSpec buildDiscoveryTask() {
+        List<String> roles = normalizedRoles();
+        String role = roles.contains(ROLE_ANALYSIS) ? ROLE_ANALYSIS : fallbackRole(roles);
+        return new TaskSpec(TASK_ID_DISCOVERY, role, DISCOVERY_TASK_DESCRIPTION, DISCOVERY_TASK_EXPECTED_OUTPUT);
+    }
+
     private AdvisoryBundle runAnalysisRounds(OrchestrationSession session, String userMessage, List<String> selectedRoles,
                                              boolean requiresEdits, String provider, String model, @Nullable String baseContext,
                                              @Nullable String streamId) {
@@ -473,6 +597,9 @@ public class OrchestratorService {
     private WorkerResult runCollaborativeTask(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits,
                                               @Nullable String baseContext, String provider, String model, @Nullable TaskLog taskLog,
                                               @Nullable String streamId) {
+        if (isCancelled(streamId)) {
+            return cancelledResult(task, streamId);
+        }
         MultiAgentProperties.RoleExecutionConfig exec = properties.getRoleExecutionConfig(task.role());
         int rounds = Math.max(1, exec.getRounds());
         int agents = Math.max(1, exec.getAgents());
@@ -486,7 +613,13 @@ public class OrchestratorService {
         String rollingContext = baseContext;
         String finalSummary = "";
         for (int round = 1; round <= rounds; round++) {
+            if (isCancelled(streamId)) {
+                return cancelledResult(task, streamId);
+            }
             for (int stageIndex = 0; stageIndex < stages.size(); stageIndex++) {
+                if (isCancelled(streamId)) {
+                    return cancelledResult(task, streamId);
+                }
                 CollaborationStage stage = stages.get(stageIndex);
                 boolean finalStage = stageIndex == stages.size() - 1;
                 String roundContext = orchestrationContextService.mergeContexts(baseContext, rollingContext);
@@ -504,7 +637,8 @@ public class OrchestratorService {
                                 streamService.emitTaskStart(streamId, subTask);
                             }
                             return CompletableFuture.supplyAsync(
-                                            () -> runWorker(session, userMessage, subTask, stageRequiresEdits, roundContext, provider, model, false, taskLog, streamId),
+                                            () -> runWorker(session, userMessage, subTask, stageRequiresEdits, roundContext, provider, model,
+                                                    false, false, taskLog, streamId),
                                             workerExecutor)
                                     .orTimeout(properties.getWorkerTimeout().toSeconds(), TimeUnit.SECONDS)
                                     .exceptionally(ex -> {
@@ -518,6 +652,10 @@ public class OrchestratorService {
                                     });
                         })
                         .toList();
+                if (isCancelled(streamId)) {
+                    futures.forEach(future -> future.cancel(true));
+                    return cancelledResult(task, streamId);
+                }
                 List<WorkerResult> roundResults = futures.stream().map(CompletableFuture::join).toList();
                 String summary = collaborateRound(userMessage, task, round, stage, strategy, finalStage, roundResults, provider, model);
                 finalSummary = summary;
@@ -577,6 +715,9 @@ public class OrchestratorService {
         if (tasks == null || tasks.isEmpty()) {
             return List.of();
         }
+        if (isCancelled(streamId)) {
+            return List.of();
+        }
         boolean contextAlreadyRun = priorResults != null && priorResults.stream()
                 .anyMatch(result -> TASK_ID_CONTEXT.equalsIgnoreCase(result.taskId()));
         List<TaskSpec> effectiveTasks = contextAlreadyRun
@@ -603,6 +744,9 @@ public class OrchestratorService {
             String engineeringContext = orchestrationContextService.buildResultsContext(
                     orchestrationContextService.filterResultsByRole(priorResults, Set.of(ROLE_ENGINEERING)));
             for (TaskSpec task : engineeringTasks) {
+                if (isCancelled(streamId)) {
+                    return results;
+                }
                 String taskContext = engineeringContext;
                 TaskLog taskLog = taskIndex.get(task.id());
                 if (streamId != null) {
@@ -626,6 +770,9 @@ public class OrchestratorService {
                         orchestrationContextService.buildResultsContext(List.of(result)));
             }
             if (!otherTasks.isEmpty()) {
+                if (isCancelled(streamId)) {
+                    return results;
+                }
                 String discussionContext = orchestrationContextService.mergeContexts(sharedContext,
                         orchestrationContextService.buildResultsContext(results));
                 List<CompletableFuture<WorkerResult>> futures = otherTasks.stream()
@@ -647,6 +794,10 @@ public class OrchestratorService {
                                     });
                         })
                         .toList();
+                if (isCancelled(streamId)) {
+                    futures.forEach(future -> future.cancel(true));
+                    return results;
+                }
                 results.addAll(futures.stream().map(CompletableFuture::join).toList());
             }
             if (implementerTasks.isEmpty()) {
@@ -655,6 +806,9 @@ public class OrchestratorService {
             String implementationContext = orchestrationContextService.mergeContexts(sharedContext,
                     orchestrationContextService.buildResultsContext(results));
             for (TaskSpec task : implementerTasks) {
+                if (isCancelled(streamId)) {
+                    return results;
+                }
                 String taskContext = implementationContext;
                 TaskLog taskLog = taskIndex.get(task.id());
                 if (streamId != null) {
@@ -697,22 +851,145 @@ public class OrchestratorService {
                                     streamService.emitTaskComplete(streamId, failed);
                                 }
                                 return failed;
-                            });
+                        });
                 })
                 .toList();
+        if (isCancelled(streamId)) {
+            futures.forEach(future -> future.cancel(true));
+            return List.of();
+        }
         return futures.stream()
                 .map(CompletableFuture::join)
                 .toList();
     }
 
+    private List<WorkerResult> executeApprovedPlanTasks(OrchestrationSession session, String userMessage, List<TaskSpec> tasks,
+                                                        boolean requiresEdits, String provider, String model,
+                                                        Map<String, TaskLog> taskIndex, @Nullable String streamId) {
+        if (tasks == null || tasks.isEmpty()) {
+            return List.of();
+        }
+        if (isCancelled(streamId)) {
+            return List.of();
+        }
+        List<TaskSpec> effectiveTasks = tasks.stream()
+                .filter(task -> !TASK_ID_CONTEXT.equalsIgnoreCase(task.id()))
+                .filter(task -> !TASK_ID_DISCOVERY.equalsIgnoreCase(task.id()))
+                .toList();
+        if (effectiveTasks.isEmpty()) {
+            return List.of();
+        }
+        long totalExecuted = taskExecutedCount.addAndGet(effectiveTasks.size());
+        log.info("Executing {} approved plan tasks. Total tasks executed so far={}.", effectiveTasks.size(), totalExecuted);
+        Duration timeout = properties.getWorkerTimeout();
+
+        List<TaskSpec> implementerTasks = effectiveTasks.stream()
+                .filter(task -> ROLE_IMPLEMENTER.equals(task.role()))
+                .toList();
+        List<TaskSpec> advisoryTasks = effectiveTasks.stream()
+                .filter(task -> !ROLE_IMPLEMENTER.equals(task.role()))
+                .toList();
+
+        List<WorkerResult> results = new ArrayList<>(effectiveTasks.size());
+        if (!advisoryTasks.isEmpty()) {
+            if (isCancelled(streamId)) {
+                return results;
+            }
+            List<CompletableFuture<WorkerResult>> futures = advisoryTasks.stream()
+                    .map(task -> {
+                        TaskLog tl = taskIndex.get(task.id());
+                        boolean taskRequiresEdits = false;
+                        if (streamId != null) {
+                            streamService.emitTaskStart(streamId, task);
+                        }
+                        return CompletableFuture.supplyAsync(
+                                        () -> runWorker(session, userMessage, task, taskRequiresEdits, null, provider, model,
+                                                false, false, tl, streamId),
+                                        workerExecutor)
+                                .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
+                                .exceptionally(ex -> {
+                                    WorkerResult failed = new WorkerResult(task.id(), task.role(),
+                                            WORKER_FAILED_MESSAGE + ex.getMessage());
+                                    if (streamId != null) {
+                                        streamService.emitTaskOutput(streamId, failed);
+                                        streamService.emitTaskComplete(streamId, failed);
+                                    }
+                                    return failed;
+                                });
+                    })
+                    .toList();
+            if (isCancelled(streamId)) {
+                futures.forEach(future -> future.cancel(true));
+                return results;
+            }
+            results.addAll(futures.stream().map(CompletableFuture::join).toList());
+        }
+
+        if (!implementerTasks.isEmpty()) {
+            if (isCancelled(streamId)) {
+                return results;
+            }
+            String implementationContext = orchestrationContextService.buildResultsContext(results);
+            for (TaskSpec task : implementerTasks) {
+                if (isCancelled(streamId)) {
+                    return results;
+                }
+                TaskLog taskLog = taskIndex.get(task.id());
+                String taskContext = implementationContext;
+                boolean taskRequiresEdits = requiresEdits;
+                if (streamId != null) {
+                    streamService.emitTaskStart(streamId, task);
+                }
+                WorkerResult result = CompletableFuture
+                        .supplyAsync(() -> runWorker(session, userMessage, task, taskRequiresEdits, taskContext, provider, model,
+                                false, false, taskLog, streamId), workerExecutor)
+                        .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
+                        .exceptionally(ex -> {
+                            WorkerResult failed = new WorkerResult(task.id(), task.role(),
+                                    WORKER_FAILED_MESSAGE + ex.getMessage());
+                            if (streamId != null) {
+                                streamService.emitTaskOutput(streamId, failed);
+                                streamService.emitTaskComplete(streamId, failed);
+                            }
+                            return failed;
+                        })
+                        .join();
+                results.add(result);
+                implementationContext = orchestrationContextService.mergeContexts(implementationContext,
+                        orchestrationContextService.buildResultsContext(List.of(result)));
+            }
+        }
+        return results;
+    }
+
     private WorkerResult runWorker(OrchestrationSession session, String userMessage, TaskSpec task, boolean requiresEdits,
                                    @Nullable String context, String provider, String model, boolean includeHandoffSchema,
-                                   @Nullable TaskLog taskLog, @Nullable String streamId) {
+                                   boolean requireToolCalls, @Nullable TaskLog taskLog, @Nullable String streamId) {
+        if (isCancelled(streamId)) {
+            return cancelledResult(task, streamId);
+        }
         String normalizedContext = orchestrationContextService.defaultContext(context);
         String systemPrompt = orchestrationPromptService.workerSystemPrompt(task.role(), requiresEdits, includeHandoffSchema);
         WorkerCallResult callResult = runWorkerPrompt(systemPrompt, userMessage, task, normalizedContext,
                 provider, model, ToolAccessPolicy.Phase.WORKER);
         logToolCalls(session, taskLog, task, callResult.audit());
+        if (requireToolCalls && callResult.toolCallCount() == 0) {
+            int attempts = 1;
+            while (attempts < MAX_TOOL_CALL_ATTEMPTS && callResult.toolCallCount() == 0) {
+                String retryPrompt = systemPrompt + """
+
+                        Your last response did not call any MCP filesystem tools. Tool calls are required for this task.
+                        Use list_directory/read_file to inspect the repository, then return your findings.
+                        """;
+                callResult = runWorkerPrompt(retryPrompt, userMessage, task, normalizedContext,
+                        provider, model, ToolAccessPolicy.Phase.WORKER);
+                logToolCalls(session, taskLog, task, callResult.audit());
+                attempts++;
+            }
+            if (callResult.toolCallCount() == 0) {
+                log.warn("Task {} returned without tool calls after {} attempts.", task.id(), MAX_TOOL_CALL_ATTEMPTS);
+            }
+        }
         if (requiresEdits && ROLE_IMPLEMENTER.equals(task.role()) && callResult.toolCallCount() == 0) {
             int attempts = 1;
             while (attempts < MAX_TOOL_CALL_ATTEMPTS && callResult.toolCallCount() == 0) {
@@ -884,16 +1161,17 @@ public class OrchestratorService {
         int maxTasks = Math.min(properties.getMaxTasks(), incomingTasks.size());
         List<TaskSpec> sanitized = new ArrayList<>(maxTasks + 1);
         List<String> normalizedRoles = normalizeAllowedRoles(allowedRoles);
-        TaskSpec contextTask = null;
+        Set<String> seenSignatures = new LinkedHashSet<>();
         for (int index = 0; index < maxTasks; index++) {
             TaskSpec task = incomingTasks.get(index);
             String role = normalizeRole(task.role(), normalizedRoles);
             if (excludeAdvisory && ADVISORY_ROLES.contains(role)) {
-                if (!TASK_ID_CONTEXT.equalsIgnoreCase(task.id())) {
-                    continue;
-                }
+                continue;
             }
             String id = StringUtils.hasText(task.id()) ? task.id() : TASK_PREFIX + (index + 1);
+            if (TASK_ID_CONTEXT.equalsIgnoreCase(id) || TASK_ID_DISCOVERY.equalsIgnoreCase(id)) {
+                continue;
+            }
             String description = StringUtils.hasText(task.description()) ? task.description() : userMessage;
             String expectedOutput = StringUtils.hasText(task.expectedOutput())
                     ? task.expectedOutput()
@@ -903,30 +1181,13 @@ public class OrchestratorService {
                 expectedOutput = fileEditDetectionService.appendFileEditInstruction(expectedOutput, canEdit);
             }
             TaskSpec normalizedTask = new TaskSpec(id, role, description, expectedOutput);
-            if (TASK_ID_CONTEXT.equalsIgnoreCase(id)) {
-                contextTask = normalizedTask;
-            } else {
-                sanitized.add(normalizedTask);
+            String signature = normalizeTaskSignature(role, description);
+            if (seenSignatures.contains(signature)) {
+                continue;
             }
+            seenSignatures.add(signature);
+            sanitized.add(normalizedTask);
         }
-        if (contextTask == null) {
-            String contextRole = normalizedRoles.contains(ROLE_ANALYSIS)
-                    ? ROLE_ANALYSIS
-                    : (normalizedRoles.isEmpty() ? ROLE_GENERAL : normalizedRoles.getFirst());
-            contextTask = new TaskSpec(
-                    TASK_ID_CONTEXT,
-                    contextRole,
-                    CONTEXT_SYNC_TASK_DESCRIPTION,
-                    CONTEXT_SYNC_TASK_EXPECTED_OUTPUT
-            );
-        }
-        List<TaskSpec> withContext = new ArrayList<>(sanitized.size() + 1);
-        withContext.add(contextTask);
-        withContext.addAll(sanitized);
-        if (withContext.size() > properties.getMaxTasks()) {
-            withContext = withContext.subList(0, properties.getMaxTasks());
-        }
-        sanitized = withContext;
         if (requiresEdits && sanitized.stream().noneMatch(task -> ROLE_IMPLEMENTER.equals(task.role()))) {
             sanitized.add(new TaskSpec(TASK_ID_IMPLEMENTATION, ROLE_IMPLEMENTER, userMessage,
                     fileEditDetectionService.appendFileEditInstruction(DEFAULT_IMPLEMENTATION_INSTRUCTION, true)));
@@ -936,6 +1197,14 @@ public class OrchestratorService {
                     : defaultPlan(userMessage, requiresEdits, allowedRoles);
         }
         return new OrchestratorPlan(objective, sanitized);
+    }
+
+    private String normalizeTaskSignature(String role, String description) {
+        String normalizedRole = StringUtils.hasText(role) ? role.trim().toLowerCase(Locale.ROOT) : "";
+        String normalizedDescription = StringUtils.hasText(description)
+                ? description.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT)
+                : "";
+        return normalizedRole + "::" + normalizedDescription;
     }
 
     private OrchestratorPlan defaultPlan(String userMessage, boolean requiresEdits, List<String> allowedRoles) {
@@ -951,6 +1220,43 @@ public class OrchestratorService {
         }
         TaskSpec fallback = new TaskSpec(TASK_ID_FALLBACK, role, userMessage, expectedOutput);
         return new OrchestratorPlan(userMessage, List.of(fallback));
+    }
+
+    private OrchestratorPlan planFromLog(OrchestratorPlanLog planLog) {
+        String objective = StringUtils.hasText(planLog.getObjective())
+                ? planLog.getObjective()
+                : (planLog.getSession() != null ? planLog.getSession().getUserPrompt() : "");
+        List<TaskLog> tasks = planLog.getTasks() == null ? List.of() : planLog.getTasks();
+        List<TaskLog> ordered = tasks.stream()
+                .sorted(java.util.Comparator.comparing(TaskLog::getCreatedAt, java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                .toList();
+        List<TaskSpec> specs = new ArrayList<>(ordered.size());
+        int index = 1;
+        for (TaskLog taskLog : ordered) {
+            String id = StringUtils.hasText(taskLog.getTaskIdAlias()) ? taskLog.getTaskIdAlias() : TASK_PREFIX + index;
+            String role = StringUtils.hasText(taskLog.getRole()) ? taskLog.getRole() : ROLE_GENERAL;
+            String description = StringUtils.hasText(taskLog.getDescription()) ? taskLog.getDescription() : objective;
+            String expectedOutput = StringUtils.hasText(taskLog.getExpectedOutput())
+                    ? taskLog.getExpectedOutput()
+                    : DEFAULT_EXPECTED_OUTPUT;
+            specs.add(new TaskSpec(id, role, description, expectedOutput));
+            index++;
+        }
+        return new OrchestratorPlan(objective, specs);
+    }
+
+    private Map<String, TaskLog> taskIndexFromPlanLog(OrchestratorPlanLog planLog) {
+        if (planLog.getTasks() == null || planLog.getTasks().isEmpty()) {
+            return Map.of();
+        }
+        Map<String, TaskLog> index = new HashMap<>();
+        int counter = 1;
+        for (TaskLog taskLog : planLog.getTasks()) {
+            String id = StringUtils.hasText(taskLog.getTaskIdAlias()) ? taskLog.getTaskIdAlias() : TASK_PREFIX + counter;
+            index.put(id, taskLog);
+            counter++;
+        }
+        return index;
     }
 
     private String normalizeRole(String role, List<String> allowedRoles) {
@@ -1490,5 +1796,30 @@ public class OrchestratorService {
     private void logSummary() {
         log.info("LLM stats: totalRequests={}, totalPlans={}, totalTasksReceived={}, totalTasksExecuted={}.",
                 llmRequestCount.get(), planResponseCount.get(), taskReceivedCount.get(), taskExecutedCount.get());
+    }
+
+    private boolean isCancelled(@Nullable String streamId) {
+        return streamId != null && streamService.isCancelled(streamId);
+    }
+
+    private boolean handleCancellation(@Nullable String streamId, OrchestrationSession session, String statusMessage) {
+        if (!isCancelled(streamId)) {
+            return false;
+        }
+        if (streamId != null) {
+            streamService.emitStatus(streamId, statusMessage);
+            streamService.emitRunComplete(streamId, "CANCELLED");
+        }
+        persistenceService.completeSession(session, null, "CANCELLED");
+        return true;
+    }
+
+    private WorkerResult cancelledResult(TaskSpec task, @Nullable String streamId) {
+        WorkerResult result = new WorkerResult(task.id(), task.role(), "Cancelled.");
+        if (streamId != null) {
+            streamService.emitTaskOutput(streamId, result);
+            streamService.emitTaskComplete(streamId, result);
+        }
+        return result;
     }
 }

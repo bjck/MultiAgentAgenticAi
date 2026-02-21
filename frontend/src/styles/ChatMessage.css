@@ -24,6 +24,7 @@
   line-height: 1.5;
   word-wrap: break-word;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  position: relative; /* Needed for absolute positioning of copy button */
 }
 
 .user-message .message-content {
@@ -97,4 +98,21 @@
 
 .toggle-button:hover {
   color: var(--link-color-hover);
+}
+
+.copy-button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.2em;
+  color: var(--text-color);
+  opacity: 0.7;
+  transition: opacity 0.3s ease;
+}
+
+.copy-button:hover {
+  opacity: 1;
 }
