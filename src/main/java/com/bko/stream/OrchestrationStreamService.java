@@ -1,6 +1,7 @@
 package com.bko.stream;
 
 import com.bko.orchestration.model.OrchestratorPlan;
+import com.bko.orchestration.model.PlanDraft;
 import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.WorkerResult;
 import org.springframework.stereotype.Component;
@@ -33,6 +34,10 @@ public class OrchestrationStreamService {
 
     public void emitPlan(String runId, OrchestratorPlan plan) {
         hub.emit(runId, "plan", plan);
+    }
+
+    public void emitPlanDraft(String runId, PlanDraft draft) {
+        hub.emit(runId, "plan", draft);
     }
 
     public void emitPlanUpdate(String runId, OrchestratorPlan plan) {
@@ -98,5 +103,13 @@ public class OrchestrationStreamService {
             payload.put("status", status);
         }
         return payload;
+    }
+
+    public boolean cancelRun(String runId) {
+        return hub.cancelRun(runId);
+    }
+
+    public boolean isCancelled(String runId) {
+        return hub.isCancelled(runId);
     }
 }

@@ -7,6 +7,7 @@ import com.bko.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.*;
 
@@ -103,6 +104,18 @@ public class OrchestrationPersistenceService {
                 .toolOutput(toolOutput)
                 .build();
         return toolCallLogRepository.save(log);
+    }
+
+    public Optional<OrchestratorPlanLog> findPlanWithTasks(String planId) {
+        if (!StringUtils.hasText(planId)) {
+            return Optional.empty();
+        }
+        try {
+            UUID id = UUID.fromString(planId);
+            return planLogRepository.findWithTasksById(id);
+        } catch (IllegalArgumentException ex) {
+            return Optional.empty();
+        }
     }
 
     private String fillTemplate(String template, Map<String, String> params) {

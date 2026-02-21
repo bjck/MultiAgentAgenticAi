@@ -15,6 +15,7 @@ class StreamRun {
     private final List<StreamEvent> buffer = new ArrayList<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private volatile boolean completed;
+    private volatile boolean cancelled;
     private volatile Instant lastUpdated = Instant.now();
 
     StreamRun(String runId) {
@@ -49,8 +50,17 @@ class StreamRun {
         return completed;
     }
 
+    boolean cancelled() {
+        return cancelled;
+    }
+
     void markCompleted() {
         completed = true;
+        lastUpdated = Instant.now();
+    }
+
+    void markCancelled() {
+        cancelled = true;
         lastUpdated = Instant.now();
     }
 

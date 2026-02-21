@@ -65,12 +65,38 @@ public class OrchestrationStreamHub {
         if (run == null) {
             return;
         }
+        if (run.cancelled() && !isCancelTerminal(type)) {
+            return;
+        }
         StreamEvent event = run.addEvent(type, data, MAX_BUFFER_SIZE);
         run.sessions().values().forEach(session -> send(session, event));
         if ("run-complete".equals(type) || "error".equals(type)) {
             run.markCompleted();
             pruneIfComplete(run);
         }
+    }
+
+    public boolean cancelRun(String runId) {
+        StreamRun run = runs.get(runId);
+        if (run == null) {
+            return false;
+        }
+        if (run.cancelled()) {
+            return true;
+        }
+        run.markCancelled();
+        StreamEvent event = run.addEvent("run-cancel", Map.of(), MAX_BUFFER_SIZE);
+        run.sessions().values().forEach(session -> send(session, event));
+        return true;
+    }
+
+    public boolean isCancelled(String runId) {
+        StreamRun run = runs.get(runId);
+        return run != null && run.cancelled();
+    }
+
+    private boolean isCancelTerminal(String type) {
+        return "run-cancel".equals(type) || "run-complete".equals(type) || "error".equals(type);
     }
 
     private void send(WebSocketSession session, StreamEvent event) {

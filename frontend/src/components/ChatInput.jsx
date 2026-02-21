@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { useWebSocket } from '../context/WebSocketProvider';
 import '../styles/ChatInput.css';
 
-const ChatInput = () => {
+const ChatInput = ({ isAgentWorking }) => {
   const [input, setInput] = useState('');
-  const [mode, setMode] = useState('stream');
+  const [mode, setMode] = useState('plan');
   const { sendMessage, sendMessageSync, requestPlan, clearChat } = useWebSocket();
 
   const handleSubmit = async (e) => {
@@ -31,6 +31,7 @@ const ChatInput = () => {
           placeholder="Type your message here..."
           rows="3"
           className="chat-textarea"
+          disabled={isAgentWorking}
         />
         <div className="chat-input-controls">
           <label htmlFor="chat-mode" className="chat-mode-label">Mode</label>
@@ -39,14 +40,15 @@ const ChatInput = () => {
             value={mode}
             onChange={(e) => setMode(e.target.value)}
             className="chat-mode-select"
+            disabled={isAgentWorking}
           >
-            <option value="stream">Stream</option>
-            <option value="sync">Sync</option>
-            <option value="plan">Plan only</option>
+            <option value="stream">Analyze (stream)</option>
+            <option value="sync">Analyze (sync)</option>
+            <option value="plan">Analyze (plan only)</option>
           </select>
         </div>
         <div className="chat-input-actions">
-          <button type="submit" className="send-button">Send</button>
+          <button type="submit" className="send-button" disabled={isAgentWorking}>Send</button>
           <button type="button" onClick={clearChat} className="clear-button">Clear Chat</button>
         </div>
       </form>

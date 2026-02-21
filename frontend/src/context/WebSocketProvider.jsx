@@ -4,21 +4,26 @@ const WebSocketContext = createContext(null);
 
 export const useWebSocket = () => useContext(WebSocketContext);
 
-const formatPlan = (plan) => {
-  if (!plan) return '';
-  if (typeof plan === 'string') return plan;
+const normalizePlanPayload = (payload) => {
+  if (!payload) return null;
+  const plan = payload.plan ? payload.plan : payload;
   const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
-  const lines = [`## Objective`, plan.objective || '', '', '## Tasks'];
-  tasks.forEach((task, index) => {
-    lines.push(`- **${index + 1}. ${task.role || 'role'}**: ${task.description || ''}`);
-  });
-  return lines.join('\n');
+  const findings = Array.isArray(payload.findings) ? payload.findings : [];
+  return {
+    objective: plan.objective || '',
+    tasks,
+    findings,
+    planId: payload.planId || payload.plan_id || '',
+    sessionId: payload.sessionId || payload.session_id || '',
+    status: payload.status || '',
+  };
 };
 
 export const WebSocketProvider = ({ children }) => {
   const [messages, setMessages] = useState([]);
-  const [plan, setPlan] = useState('');
+  const [plan, setPlan] = useState(null);
   const [sessionId, setSessionId] = useState('');
+  const [lastPrompt, setLastPrompt] = useState('');
   const [selectedProvider, setSelectedProvider] = useState('GOOGLE');
   const [selectedModel, setSelectedModel] = useState('');
   const [isAgentWorking, setIsAgentWorking] = useState(false); // New state for agent activity
@@ -38,10 +43,11 @@ export const WebSocketProvider = ({ children }) => {
   };
 
   const resetForNewRequest = () => {
-    setPlan('');
+    setPlan(null);
     setSessionId('');
     taskBuffers.current.clear();
     closeSocket();
+    runIdRef.current = null; // Clear runId on new request
   };
 
   const handleStreamEvent = (event) => {
@@ -51,7 +57,11 @@ export const WebSocketProvider = ({ children }) => {
       return;
     }
     if (type === 'plan' || type === 'plan-update') {
-      setPlan(formatPlan(data));
+      const normalized = normalizePlanPayload(data);
+      setPlan(normalized);
+      if (normalized?.sessionId) {
+        setSessionId(normalized.sessionId);
+      }
       return;
     }
     if (type === 'task-output') {
@@ -75,11 +85,29 @@ export const WebSocketProvider = ({ children }) => {
         appendMessage({ type: 'agent', content: text });
       }
       setIsAgentWorking(false); // Agent finished working
+      runIdRef.current = null; // Clear runId on completion
+      return;
+    }
+    if (type === 'run-complete') {
+      if (data?.status) {
+        setPlan((prev) => (prev ? { ...prev, status: data.status } : prev));
+      }
+      setIsAgentWorking(false);
+      runIdRef.current = null; // Clear runId on completion
+      return;
+    }
+    if (type === 'run-cancel') {
+      setPlan((prev) => (prev ? { ...prev, status: 'CANCELLED' } : prev));
+      appendMessage({ type: 'system', content: 'Run cancelled.' });
+      setIsAgentWorking(false);
+      runIdRef.current = null;
+      closeSocket();
       return;
     }
     if (type === 'error') {
       appendMessage({ type: 'system', content: data?.message || 'Unknown error.' });
       setIsAgentWorking(false); // Agent finished working with an error
+      runIdRef.current = null; // Clear runId on error
     }
   };
 
@@ -112,6 +140,7 @@ export const WebSocketProvider = ({ children }) => {
     const trimmed = message.trim();
     if (!trimmed) return;
     appendMessage({ type: 'user', content: trimmed });
+    setLastPrompt(trimmed);
     resetForNewRequest();
     setIsAgentWorking(true); // Agent starts working
 
@@ -151,6 +180,7 @@ export const WebSocketProvider = ({ children }) => {
     const trimmed = message.trim();
     if (!trimmed) return;
     appendMessage({ type: 'user', content: trimmed });
+    setLastPrompt(trimmed);
     resetForNewRequest();
     setIsAgentWorking(true); // Agent starts working
 
@@ -172,11 +202,12 @@ export const WebSocketProvider = ({ children }) => {
         return;
       }
       const data = await response.json();
-      if (data?.plan) {
-        setPlan(formatPlan(data.plan));
-      }
-      if (data?.finalAnswer) {
-        appendMessage({ type: 'agent', content: data.finalAnswer });
+      const normalized = normalizePlanPayload(data);
+      if (normalized) {
+        setPlan(normalized);
+        if (normalized.sessionId) {
+          setSessionId(normalized.sessionId);
+        }
       }
       setIsAgentWorking(false); // Agent finished working
     } catch (e) {
@@ -189,6 +220,7 @@ export const WebSocketProvider = ({ children }) => {
     const trimmed = message.trim();
     if (!trimmed) return;
     appendMessage({ type: 'user', content: trimmed });
+    setLastPrompt(trimmed);
     resetForNewRequest();
     setIsAgentWorking(true); // Agent starts working
 
@@ -210,8 +242,12 @@ export const WebSocketProvider = ({ children }) => {
         return;
       }
       const data = await response.json();
-      if (data?.objective || data?.tasks) {
-        setPlan(formatPlan({ objective: data.objective, tasks: data.tasks }));
+      const normalized = normalizePlanPayload(data);
+      if (normalized) {
+        setPlan(normalized);
+        if (normalized.sessionId) {
+          setSessionId(normalized.sessionId);
+        }
       }
       setIsAgentWorking(false); // Agent finished working
     } catch (e) {
@@ -222,11 +258,126 @@ export const WebSocketProvider = ({ children }) => {
 
   const clearChat = () => {
     setMessages([]);
-    setPlan('');
+    setPlan(null);
     setSessionId('');
     taskBuffers.current.clear();
     closeSocket();
+    runIdRef.current = null; // Clear runId when chat is cleared
     setIsAgentWorking(false); // Ensure spinner is off when chat is cleared
+  };
+
+  const executePlan = async (planId, feedback, useStreaming = true) => {
+    if (!planId) {
+      appendMessage({ type: 'system', content: 'Missing plan ID for execution.' });
+      return;
+    }
+    setPlan((prev) => (prev ? { ...prev, status: 'EXECUTING' } : prev));
+    taskBuffers.current.clear();
+    closeSocket();
+    setIsAgentWorking(true);
+    appendMessage({ type: 'system', content: 'Executing approved plan...' });
+
+    const payload = {
+      planId,
+      feedback: feedback || null,
+      provider: selectedProvider || null,
+      model: selectedModel || null,
+    };
+
+    if (useStreaming) {
+      try {
+        const response = await fetch('/api/chat/execute/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          appendMessage({ type: 'system', content: `Failed to execute (${response.status}).` });
+          setIsAgentWorking(false);
+          return;
+        }
+        const data = await response.json();
+        if (data?.runId) {
+          connectToRun(data.runId);
+        } else {
+          appendMessage({ type: 'system', content: 'Missing run ID from server.' });
+          setIsAgentWorking(false);
+        }
+      } catch (e) {
+        appendMessage({ type: 'system', content: `Failed to execute: ${e.message}` });
+        setIsAgentWorking(false);
+      }
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/chat/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        appendMessage({ type: 'system', content: `Failed to execute (${response.status}).` });
+        setIsAgentWorking(false);
+        return;
+      }
+      const data = await response.json();
+      if (data?.finalAnswer) {
+        appendMessage({ type: 'agent', content: data.finalAnswer });
+      }
+      setPlan((prev) => (prev ? { ...prev, status: 'COMPLETED' } : prev));
+      setIsAgentWorking(false);
+    } catch (e) {
+      appendMessage({ type: 'system', content: `Failed to execute: ${e.message}` });
+      setIsAgentWorking(false);
+    }
+  };
+
+  const requestPlanRevision = async (feedback) => {
+    if (!lastPrompt) {
+      appendMessage({ type: 'system', content: 'Missing previous request to revise.' });
+      return;
+    }
+    const note = feedback && feedback.trim()
+      ? `\n\nUser feedback to revise discovery/plan:\n${feedback.trim()}`
+      : '';
+    const combined = `Original request:\n${lastPrompt}${note}`;
+    await requestPlan(combined);
+  };
+
+  const cancelAgentRun = async () => {
+    if (!runIdRef.current) {
+      appendMessage({ type: 'system', content: 'No active run to cancel.' });
+      return;
+    }
+
+    setIsAgentWorking(false); // Optimistically set to false
+    appendMessage({ type: 'system', content: 'Attempting to cancel agent run...' });
+
+    try {
+      const response = await fetch('/api/chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: runIdRef.current }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.status === 'success') {
+        appendMessage({ type: 'system', content: 'Agent run canceled successfully.' });
+        closeSocket(); // Close the WebSocket connection for the canceled run
+        runIdRef.current = null; // Clear the runId
+        setPlan(null); // Clear the plan as it's no longer relevant
+      } else {
+        appendMessage({ type: 'system', content: `Failed to cancel run: ${data.message || 'Unknown error.'}` });
+        // If cancellation failed, the agent might still be working, so revert isAgentWorking
+        setIsAgentWorking(true);
+      }
+    } catch (e) {
+      appendMessage({ type: 'system', content: `Error during cancellation: ${e.message}` });
+      // If an error occurred, the agent might still be working, so revert isAgentWorking
+      setIsAgentWorking(true);
+    }
   };
 
   const value = {
@@ -236,12 +387,16 @@ export const WebSocketProvider = ({ children }) => {
     sendMessage,
     sendMessageSync,
     requestPlan,
+    requestPlanRevision,
+    executePlan,
     clearChat,
     selectedProvider,
     setSelectedProvider,
     selectedModel,
     setSelectedModel,
     isAgentWorking, // Expose isAgentWorking state
+    cancelAgentRun, // Expose cancelAgentRun function
+    runId: runIdRef.current, // Expose runId for potential use
   };
 
   return (

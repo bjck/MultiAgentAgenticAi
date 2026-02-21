@@ -19,6 +19,7 @@
   justify-content: center;
   align-items: center;
   padding: 10px;
+  gap: 10px; /* Add some space between spinner and button */
 }
 
 .agent-spinner {
@@ -28,6 +29,21 @@
   width: 24px;
   height: 24px;
   animation: spinner-animation 1s linear infinite;
+}
+
+.cancel-button {
+  padding: 8px 15px;
+  background-color: var(--cancel-button-bg);
+  color: var(--cancel-button-color);
+  border: none;
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background-color 0.2s ease;
+}
+
+.cancel-button:hover {
+  background-color: var(--cancel-button-hover-bg);
 }
 
 @keyframes spinner-animation {

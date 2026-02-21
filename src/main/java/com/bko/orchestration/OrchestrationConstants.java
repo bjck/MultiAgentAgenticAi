@@ -37,6 +37,7 @@ public final class OrchestrationConstants {
     public static final String TASK_ID_IMPLEMENTATION = "task-impl";
     public static final String TASK_ID_FALLBACK = "task-1";
     public static final String TASK_ID_CONTEXT = "task-0-context";
+    public static final String TASK_ID_DISCOVERY = "task-0-discovery";
     public static final String TASK_PREFIX = "task-";
 
     // Default messages and instructions
@@ -61,6 +62,15 @@ public final class OrchestrationConstants {
             """;
     public static final String CONTEXT_SYNC_TASK_DESCRIPTION = "Context sync: read AGENTS.md (and frontend/AGENTS.md if relevant), then list the most relevant files/dirs to inspect for this request.";
     public static final String CONTEXT_SYNC_TASK_EXPECTED_OUTPUT = "Summarize key guidance from AGENTS.md (and frontend/AGENTS.md if relevant) and list the top relevant files/dirs to inspect next. Do not modify files.";
+    public static final String DISCOVERY_TASK_DESCRIPTION = "Discovery: analyze the user request and inspect the repo with MCP filesystem tools to identify relevant files and key implementation details.";
+    public static final String DISCOVERY_TASK_EXPECTED_OUTPUT = """
+            Provide a concise discovery report with:
+            - Summary (1-3 sentences)
+            - Relevant files/dirs (bullets)
+            - Key findings (bullets)
+            - Assumptions or open questions (bullets)
+            Do not modify files.
+            """;
 
     // Handoff schemas
     public static final String ANALYSIS_HANDOFF_SCHEMA = """
@@ -170,12 +180,15 @@ public final class OrchestrationConstants {
             Engineering tasks are advisory and should not modify files.
             Implementer tasks should apply file edits when required, based on engineering consensus.
             Keep tasks independent and specific. Each task should be actionable by a single worker.
+            Avoid duplicate tasks. Do not assign the same task to multiple roles unless they have clearly different responsibilities.
+            Only include multiple implementer tasks if they are distinct and non-overlapping.
             You may use MCP filesystem tools to inspect the workspace when needed.
             If the user requests code or content changes, ensure at least one task is explicitly responsible for applying file edits via MCP filesystem tools.
             Make it clear which task should write files and which should not.
+            Tasks must be concrete execution steps with clear deliverables (include relevant files/areas and acceptance criteria).
             Return only JSON that matches the requested schema.
             Project guidance is documented in AGENTS.md at the repo root. For frontend work, also see frontend/AGENTS.md.
-            The first task MUST be a context sync: read AGENTS.md (and frontend/AGENTS.md if relevant) and list the most relevant files/dirs to inspect.
+            A discovery pass has already inspected the repo and is provided in context. Do NOT include context sync or discovery tasks in the plan.
 
             Role skill registry:
             %s

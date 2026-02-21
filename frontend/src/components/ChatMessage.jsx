@@ -6,6 +6,7 @@ const MAX_CHARS = 500; // Define maximum characters before truncation
 
 const ChatMessage = ({ message }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [copied, setCopied] = useState(false); // State for copy feedback
 
   const resolved = typeof message === 'string' ? { type: 'agent', content: message } : message || {};
   const messageType = resolved.type || 'agent';
@@ -21,6 +22,17 @@ const ChatMessage = ({ message }) => {
     ? fullContent.substring(0, MAX_CHARS) + '... ' // Add space before button
     : fullContent;
 
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(fullContent)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000); // Show "Copied!" for 2 seconds
+      })
+      .catch(err => {
+        console.error('Failed to copy: ', err);
+      });
+  };
+
   return (
     <div className={`chat-message ${messageClass}`}>
       <div className="message-content">
@@ -30,6 +42,9 @@ const ChatMessage = ({ message }) => {
             {isExpanded ? 'Show Less' : 'Show More'}
           </button>
         )}
+        <button className="copy-button" onClick={copyToClipboard} title="Copy to clipboard">
+          {copied ? 'Copied!' : '📋'} {/* Clipboard icon or "Copied!" text */}
+        </button>
       </div>
     </div>
   );
