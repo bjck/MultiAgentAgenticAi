@@ -5,28 +5,20 @@ import static com.bko.orchestration.OrchestrationConstants.*;
 import com.bko.entity.OrchestrationSession;
 import com.bko.entity.OrchestratorPlanLog;
 import com.bko.entity.TaskLog;
-import com.bko.orchestration.api.AgentInvocationService;
 import com.bko.orchestration.api.EventProcessingService;
-import com.bko.orchestration.api.SkillExecutionService;
 import com.bko.orchestration.api.StatePersistenceService;
 import com.bko.orchestration.api.TaskManagementService;
-import com.bko.orchestration.model.AdvisoryBundle;
-import com.bko.orchestration.model.DiscoveryBundle;
-import com.bko.orchestration.model.FailureDetail;
 import com.bko.orchestration.model.OrchestrationResult;
 import com.bko.orchestration.model.OrchestratorPlan;
 import com.bko.orchestration.model.PlanDraft;
-import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.WorkerResult;
-import com.bko.orchestration.service.FileEditDetectionService;
-import com.bko.orchestration.service.OrchestrationContextService;
 import com.bko.orchestration.service.OrchestrationMetricsService;
+import com.bko.orchestration.service.SkillPlanningService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,145 +27,83 @@ import java.util.Map;
 @Slf4j
 public class OrchestratorService {
 
-    private final FileEditDetectionService fileEditDetectionService;
-    private final OrchestrationContextService orchestrationContextService;
-    private final AgentInvocationService agentInvocationService;
     private final TaskManagementService taskManagementService;
-    private final SkillExecutionService skillExecutionService;
+    private final SkillPlanningService skillPlanningService;
     private final StatePersistenceService persistenceService;
     private final EventProcessingService eventProcessingService;
     private final OrchestrationMetricsService metricsService;
 
-    public OrchestratorService(FileEditDetectionService fileEditDetectionService,
-                               OrchestrationContextService orchestrationContextService,
-                               AgentInvocationService agentInvocationService,
-                               TaskManagementService taskManagementService,
-                               SkillExecutionService skillExecutionService,
+    public OrchestratorService(TaskManagementService taskManagementService,
+                               SkillPlanningService skillPlanningService,
                                StatePersistenceService persistenceService,
                                EventProcessingService eventProcessingService,
                                OrchestrationMetricsService metricsService) {
-        this.fileEditDetectionService = fileEditDetectionService;
-        this.orchestrationContextService = orchestrationContextService;
-        this.agentInvocationService = agentInvocationService;
         this.taskManagementService = taskManagementService;
-        this.skillExecutionService = skillExecutionService;
+        this.skillPlanningService = skillPlanningService;
         this.persistenceService = persistenceService;
         this.eventProcessingService = eventProcessingService;
         this.metricsService = metricsService;
     }
 
     public OrchestrationResult orchestrate(String userMessage, String provider, String model) {
-        return orchestrateInternal(userMessage, provider, model, null);
+        return orchestrateInternal(userMessage, provider, model, null, null);
     }
 
     public OrchestrationResult orchestrateStreaming(String userMessage, String provider, String model, String streamId) {
-        return orchestrateInternal(userMessage, provider, model, streamId);
+        return orchestrateInternal(userMessage, provider, model, streamId, null);
     }
 
-    private OrchestrationResult orchestrateInternal(String userMessage, String provider, String model, @Nullable String streamId) {
-        OrchestrationSession session = persistenceService.startSession(userMessage, provider, model);
+    public OrchestrationResult orchestrateWithSession(OrchestrationSession session, String userMessage, String provider, String model) {
+        return orchestrateInternal(userMessage, provider, model, null, session);
+    }
+
+    private OrchestrationResult orchestrateInternal(String userMessage, String provider, String model,
+                                                    @Nullable String streamId,
+                                                    @Nullable OrchestrationSession existingSession) {
+        OrchestrationSession session = existingSession != null
+                ? existingSession
+                : persistenceService.startSession(userMessage, provider, model);
         try {
             eventProcessingService.emitSession(streamId, session.getId().toString());
             eventProcessingService.emitStatus(streamId, "Starting orchestration");
             if (handleCancellation(streamId, session, "Cancelled")) {
                 return new OrchestrationResult(new OrchestratorPlan(userMessage, List.of()), List.of(), "Cancelled.");
             }
-            boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
-            eventProcessingService.emitStatus(streamId, "Selecting roles");
-            List<String> initialRoles = taskManagementService.selectRoles(session, userMessage, requiresEdits, null, provider, model);
-            List<WorkerResult> advisoryResults = new ArrayList<>();
-            List<TaskSpec> advisoryTasks = new ArrayList<>();
-
-            TaskSpec contextTask = taskManagementService.buildContextSyncTask(initialRoles);
-            String contextSyncContext = null;
-            if (contextTask != null) {
-                advisoryTasks.add(contextTask);
-                eventProcessingService.emitTaskStart(streamId, contextTask);
-                WorkerResult contextResult = skillExecutionService.runWorker(session, userMessage, contextTask, false, null, provider, model,
-                        false, false, null, streamId);
-                advisoryResults.add(contextResult);
-                contextSyncContext = orchestrationContextService.buildResultsContext(List.of(contextResult));
-            }
-
-            AdvisoryBundle analysisBundle = taskManagementService.runAnalysisRounds(session, userMessage, initialRoles, requiresEdits,
-                    provider, model, contextSyncContext, streamId);
-            if (!analysisBundle.results().isEmpty()) {
-                advisoryResults.addAll(analysisBundle.results());
-                advisoryTasks.addAll(analysisBundle.tasks());
-            }
-
-            TaskSpec designTask = taskManagementService.buildDesignTask(userMessage, initialRoles);
-            if (designTask != null) {
-                advisoryTasks.add(designTask);
-                String analysisContext = orchestrationContextService.buildResultsContext(analysisBundle.results());
-                String designContext = orchestrationContextService.mergeContexts(contextSyncContext, analysisContext);
-                eventProcessingService.emitTaskStart(streamId, designTask);
-                advisoryResults.add(skillExecutionService.runWorker(session, userMessage, designTask, requiresEdits, designContext, provider, model,
-                        true, false, null, streamId));
-            }
-
-            if (!advisoryTasks.isEmpty()) {
-                log.info("Advisory tasks scheduled: {}.", advisoryTasks.size());
-            }
-            String advisoryContext = orchestrationContextService.mergeContexts(
-                    contextSyncContext,
-                    orchestrationContextService.buildAdvisoryContext(advisoryResults));
-
             eventProcessingService.emitStatus(streamId, "Generating plan");
-            List<String> executionRoles = taskManagementService.selectRoles(session, userMessage, requiresEdits, advisoryContext, provider, model);
-            OrchestratorPlan initialPlan = taskManagementService.requestPlan(session, userMessage, requiresEdits, executionRoles,
-                    advisoryContext, provider, model, true, false);
-            eventProcessingService.emitPlan(streamId, initialPlan);
+            OrchestratorPlan plan = taskManagementService.requestPlan(session, userMessage, List.of(ROLE_GENERAL),
+                    null, provider, model, true, false);
+            eventProcessingService.emitPlan(streamId, plan);
 
-            var planLog = persistenceService.logPlan(session, initialPlan, true);
-            Map<String, TaskLog> taskIndex = new HashMap<>();
-            taskIndex.putAll(persistenceService.logTasks(planLog, initialPlan.tasks()));
-
-            List<TaskSpec> allTasks = new ArrayList<>(advisoryTasks);
-            List<WorkerResult> allResults = new ArrayList<>(advisoryResults);
-
-            OrchestratorPlan currentPlan = initialPlan;
-            int iteration = 0;
-            while (iteration < MAX_EXECUTION_ITERATIONS && currentPlan != null && !currentPlan.tasks().isEmpty()) {
-                if (handleCancellation(streamId, session, "Cancelled")) {
-                    return new OrchestrationResult(new OrchestratorPlan(userMessage, allTasks), allResults, "Cancelled.");
-                }
-                log.info("Executing plan iteration {} with {} tasks.", iteration + 1, currentPlan.tasks().size());
-                eventProcessingService.emitStatus(streamId, "Executing tasks (iteration " + (iteration + 1) + ")");
-                List<WorkerResult> iterationResults = taskManagementService.executePlanTasks(session, userMessage, currentPlan.tasks(),
-                        requiresEdits, advisoryContext, allResults, provider, model, taskIndex, streamId);
-                allResults.addAll(iterationResults);
-                allTasks.addAll(currentPlan.tasks());
-
-                List<FailureDetail> failures = taskManagementService.collectFailures(iterationResults, currentPlan.tasks());
-                String errorSummary = taskManagementService.buildErrorSummary(failures);
-                OrchestratorPlan continuationPlan = taskManagementService.requestContinuationPlan(session, userMessage, requiresEdits,
-                        executionRoles, advisoryContext, errorSummary, currentPlan, allResults, provider, model, true, true);
-                if (continuationPlan.tasks().isEmpty() && !failures.isEmpty()) {
-                    continuationPlan = taskManagementService.sanitizePlan(taskManagementService.buildRetryPlan(userMessage, failures),
-                            userMessage, requiresEdits, executionRoles, true, true);
-                }
-                if (continuationPlan.tasks().isEmpty()) {
-                    break;
-                }
-                var contPlanLog = persistenceService.logPlan(session, continuationPlan, false);
-                taskIndex.putAll(persistenceService.logTasks(contPlanLog, continuationPlan.tasks()));
-                currentPlan = continuationPlan;
-                eventProcessingService.emitPlanUpdate(streamId, currentPlan);
-                iteration++;
+            if (plan.tasks().isEmpty()) {
+                eventProcessingService.emitStatus(streamId, "No tasks to execute");
+                String finalAnswer = "No tasks generated.";
+                persistenceService.completeSession(session, finalAnswer, "COMPLETED");
+                eventProcessingService.emitFinalAnswer(streamId, finalAnswer);
+                eventProcessingService.emitRunComplete(streamId, "COMPLETED");
+                metricsService.logSummary();
+                return new OrchestrationResult(plan, List.of(), finalAnswer);
             }
 
-            String objective = (initialPlan != null && StringUtils.hasText(initialPlan.objective()))
-                    ? initialPlan.objective()
-                    : userMessage;
-            OrchestratorPlan finalPlan = new OrchestratorPlan(objective, allTasks);
-            eventProcessingService.emitStatus(streamId, "Synthesizing response");
-            String finalAnswer = agentInvocationService.synthesize(session, userMessage, finalPlan, allResults, provider, model);
+            OrchestratorPlanLog planLog = persistenceService.logPlan(session, plan, true);
+            Map<String, TaskLog> taskIndex = new HashMap<>();
+            taskIndex.putAll(persistenceService.logTasks(planLog, plan.tasks()));
+
+            if (handleCancellation(streamId, session, "Cancelled")) {
+                return new OrchestrationResult(plan, List.of(), "Cancelled.");
+            }
+            eventProcessingService.emitStatus(streamId, "Executing tasks");
+            List<WorkerResult> results = taskManagementService.executePlanTasks(session, userMessage, plan.tasks(),
+                    null, List.of(), provider, model, taskIndex, streamId);
+
+            String objective = StringUtils.hasText(plan.objective()) ? plan.objective() : userMessage;
+            OrchestratorPlan finalPlan = new OrchestratorPlan(objective, plan.tasks());
+            eventProcessingService.emitStatus(streamId, "Preparing response");
+            String finalAnswer = formatResults(results);
             persistenceService.completeSession(session, finalAnswer, "COMPLETED");
             eventProcessingService.emitFinalAnswer(streamId, finalAnswer);
             eventProcessingService.emitRunComplete(streamId, "COMPLETED");
             metricsService.logSummary();
-            return new OrchestrationResult(finalPlan, allResults, finalAnswer);
+            return new OrchestrationResult(finalPlan, results, finalAnswer);
         } finally {
             // no thread-local state to clear
         }
@@ -191,33 +121,26 @@ public class OrchestratorService {
         OrchestrationSession session = persistenceService.startSession(userMessage, provider, model);
         try {
             eventProcessingService.emitSession(streamId, session.getId().toString());
-            eventProcessingService.emitStatus(streamId, "Starting discovery");
+            eventProcessingService.emitStatus(streamId, "Starting planning");
             if (handleCancellation(streamId, session, "Cancelled")) {
                 OrchestratorPlan emptyPlan = new OrchestratorPlan(userMessage, List.of());
-                return new PlanDraft("", session.getId().toString(), emptyPlan, List.of(), "CANCELLED");
+                return new PlanDraft("", session.getId().toString(), emptyPlan, List.of(), List.of(), "CANCELLED");
             }
-            boolean requiresEdits = fileEditDetectionService.requiresFileEdits(userMessage);
-            DiscoveryBundle discovery = taskManagementService.runDiscovery(session, userMessage, provider, model, streamId);
-            if (handleCancellation(streamId, session, "Cancelled")) {
-                OrchestratorPlan emptyPlan = new OrchestratorPlan(userMessage, List.of());
-                return new PlanDraft("", session.getId().toString(), emptyPlan, discovery.results(), "CANCELLED");
-            }
-            String discoveryContext = orchestrationContextService.buildResultsContext(discovery.results());
-
             eventProcessingService.emitStatus(streamId, "Generating task plan");
             if (handleCancellation(streamId, session, "Cancelled")) {
                 OrchestratorPlan emptyPlan = new OrchestratorPlan(userMessage, List.of());
-                return new PlanDraft("", session.getId().toString(), emptyPlan, discovery.results(), "CANCELLED");
+                return new PlanDraft("", session.getId().toString(), emptyPlan, List.of(), List.of(), "CANCELLED");
             }
-            List<String> selectedRoles = taskManagementService.selectRoles(session, userMessage, requiresEdits, discoveryContext, provider, model);
-            OrchestratorPlan sanitized = taskManagementService.requestPlan(session, userMessage, requiresEdits, selectedRoles,
-                    discoveryContext, provider, model, false, false);
+            OrchestratorPlan sanitized = taskManagementService.requestPlan(session, userMessage, List.of(ROLE_GENERAL),
+                    null, provider, model, false, false);
             OrchestratorPlanLog planLog = persistenceService.logPlan(session, sanitized, true);
             persistenceService.logTasks(planLog, sanitized.tasks());
             persistenceService.completeSession(session, null, "AWAITING_APPROVAL");
 
+            var skillPlans = skillPlanningService.planForTasks(session, userMessage, sanitized.tasks(),
+                    null, provider, model);
             PlanDraft draft = new PlanDraft(planLog.getId().toString(), session.getId().toString(),
-                    sanitized, discovery.results(), "AWAITING_APPROVAL");
+                    sanitized, List.of(), skillPlans, "AWAITING_APPROVAL");
             eventProcessingService.emitPlanDraft(streamId, draft);
             eventProcessingService.emitStatus(streamId, "Awaiting approval");
             eventProcessingService.emitRunComplete(streamId, "AWAITING_APPROVAL");
@@ -252,15 +175,14 @@ public class OrchestratorService {
             if (StringUtils.hasText(feedback)) {
                 userMessage = userMessage + "\n\nUser feedback:\n" + feedback.trim();
             }
-            boolean requiresEdits = fileEditDetectionService.requiresFileEdits(session.getUserPrompt());
             OrchestratorPlan plan = taskManagementService.planFromLog(planLog);
             Map<String, TaskLog> taskIndex = taskManagementService.taskIndexFromPlanLog(planLog);
             List<WorkerResult> results = taskManagementService.executeApprovedPlanTasks(session, userMessage, plan.tasks(),
-                    requiresEdits, provider, model, taskIndex, streamId);
+                    provider, model, taskIndex, streamId);
             if (handleCancellation(streamId, session, "Cancelled")) {
                 return new OrchestrationResult(plan, results, "Cancelled.");
             }
-            String finalAnswer = agentInvocationService.synthesize(session, userMessage, plan, results, provider, model);
+            String finalAnswer = formatResults(results);
             persistenceService.completeSession(session, finalAnswer, "COMPLETED");
             eventProcessingService.emitFinalAnswer(streamId, finalAnswer);
             eventProcessingService.emitRunComplete(streamId, "COMPLETED");
@@ -279,5 +201,30 @@ public class OrchestratorService {
         eventProcessingService.emitRunComplete(streamId, "CANCELLED");
         persistenceService.completeSession(session, null, "CANCELLED");
         return true;
+    }
+
+    private String formatResults(@Nullable List<WorkerResult> results) {
+        if (results == null || results.isEmpty()) {
+            return "No results produced.";
+        }
+        if (results.size() == 1) {
+            String output = results.getFirst() != null ? results.getFirst().output() : "";
+            return StringUtils.hasText(output) ? output : "No results produced.";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (WorkerResult result : results) {
+            if (result == null) {
+                continue;
+            }
+            String label = StringUtils.hasText(result.taskId()) ? result.taskId() : "task";
+            if (StringUtils.hasText(result.role())) {
+                label = label + " (" + result.role() + ")";
+            }
+            if (!sb.isEmpty()) {
+                sb.append("\n\n");
+            }
+            sb.append(label).append(":\n").append(result.output() == null ? "" : result.output());
+        }
+        return sb.isEmpty() ? "No results produced." : sb.toString();
     }
 }

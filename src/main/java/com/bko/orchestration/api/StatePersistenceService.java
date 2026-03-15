@@ -49,6 +49,8 @@ public interface StatePersistenceService {
      * @param userTemplate An optional user message template.
      * @param params A map of parameters used to fill the user template.
      * @param fullResponse An optional full response received from the AI model.
+     * @param inputTokens Input (prompt) token count from the model API when available.
+     * @param outputTokens Output (completion) token count from the model API when available.
      */
     void logPrompt(OrchestrationSession session,
                    String purpose,
@@ -56,7 +58,9 @@ public interface StatePersistenceService {
                    @Nullable String systemPrompt,
                    @Nullable String userTemplate,
                    Map<String, String> params,
-                   @Nullable String fullResponse);
+                   @Nullable String fullResponse,
+                   @Nullable Integer inputTokens,
+                   @Nullable Integer outputTokens);
 
     /**
      * Logs an orchestration plan.

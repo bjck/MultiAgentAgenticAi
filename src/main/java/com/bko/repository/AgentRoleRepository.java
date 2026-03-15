@@ -5,6 +5,7 @@ import com.bko.entity.PhaseType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -24,10 +25,20 @@ public interface AgentRoleRepository extends JpaRepository<AgentRole, UUID> {
     Optional<AgentRole> findByPhaseAndCode(PhaseType phase, String code);
 
     /**
+     * Finds an {@link AgentRole} by phase when the code is null.
+     *
+     * @param phase The phase type.
+     * @return An {@link Optional} containing the matching role, or empty if not found.
+     */
+    Optional<AgentRole> findByPhaseAndCodeIsNull(PhaseType phase);
+
+    /**
      * Finds the default {@link AgentRole} for a given phase.
      *
      * @param phase The phase type.
      * @return An {@link Optional} containing the default {@link AgentRole} for the specified phase, or empty if not found.
      */
     Optional<AgentRole> findByPhaseAndIsDefaultTrue(PhaseType phase);
+
+    List<AgentRole> findByPhaseAndActiveTrueOrderByCodeAsc(PhaseType phase);
 }

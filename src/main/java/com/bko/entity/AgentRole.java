@@ -37,6 +37,9 @@ public class AgentRole {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    @Column(name = "skill_budget")
+    private Integer skillBudget;
+
     @Column(nullable = false)
     private boolean active = true;
 

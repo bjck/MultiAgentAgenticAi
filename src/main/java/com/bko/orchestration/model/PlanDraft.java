@@ -7,6 +7,7 @@ public record PlanDraft(
         String sessionId,
         OrchestratorPlan plan,
         List<WorkerResult> findings,
+        List<TaskSkillPlan> skillPlans,
         String status
 ) {
 }

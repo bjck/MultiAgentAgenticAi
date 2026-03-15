@@ -2,6 +2,7 @@ package com.bko.api;
 
 import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.PlanDraft;
+import com.bko.orchestration.model.TaskSkillPlan;
 import com.bko.orchestration.model.WorkerResult;
 
 import java.time.Instant;
@@ -16,7 +17,8 @@ public record PlanResponse(
         String status,
         String objective,
         List<TaskSpec> tasks,
-        List<WorkerResult> findings
+        List<WorkerResult> findings,
+        List<TaskSkillPlan> skillPlans
 ) {
 
     public static PlanResponse from(PlanDraft draft) {
@@ -28,7 +30,8 @@ public record PlanResponse(
                 draft.status(),
                 draft.plan().objective(),
                 draft.plan().tasks(),
-                draft.findings()
+                draft.findings(),
+                draft.skillPlans()
         );
     }
 }

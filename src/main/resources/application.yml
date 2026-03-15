@@ -1,7 +1,7 @@
 logging:
   level:
-    com.bko.http.logging: INFO
-    org.springframework.ai: DEBUG
+    com.bko.http.logging: WARN
+    org.springframework.ai: WARN
 
 spring:
   application:
@@ -31,23 +31,6 @@ spring:
       chat:
         options:
           model: ${OPENAI_MODEL:claude-4-sonnet}
-    mcp:
-      client:
-        type: SYNC
-        toolcallback:
-          enabled: true
-        stdio:
-          root-change-notification: true
-          connections:
-            filesystem:
-              command: ${MCP_FS_COMMAND:cmd.exe}
-              args:
-                - ${MCP_FS_ARG0:/c}
-                - ${MCP_FS_ARG1:npx}
-                - ${MCP_FS_ARG2:-y}
-                - ${MCP_FS_ARG3:@modelcontextprotocol/server-filesystem}
-                - ${MCP_FS_ROOT:${multiagent.workspace-root}}
-
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.xml
     enabled: ${LIQUIBASE_ENABLED:false}
@@ -55,7 +38,10 @@ spring:
 multiagent:
   max-tasks: 4
   worker-concurrency: 4
-  worker-timeout: 90s
+  # Worker task timeout (LLM + tool calls + possible retries). Increase if workers hit "request timed out" (e.g. 180s for arXiv/tool-heavy tasks).
+  worker-timeout: 180s
+  # How often (ms) to poll for scheduled agents that are due (default: 60000 = 1 minute)
+  scheduled-agent-poll-interval: 60000
   role-execution-defaults:
     rounds: 1
     agents: 1
@@ -72,15 +58,6 @@ multiagent:
     api-key: ${OPENAI_API_KEY:none}
     base-url: ${OPENAI_BASE_URL:https://api-cortex.t-netcompany.com/v1}
     model: ${OPENAI_MODEL:claude-4-sonnet}
-  worker-roles:
-    - analysis
-    - research
-    - design
-    - engineering
-    - implementer
-    - qa
-    - writing
-    - general
   # Agent skills configuration - define specialized skills per agent type
   skills:
     # Skills for the orchestrator agent (planning phase)
@@ -99,38 +76,7 @@ multiagent:
       qa: []
       writing: []
       general: []
-  # Agent tools configuration - restrict tool exposure per agent to reduce tokens and enforce least privilege
-  tools:
-    orchestrator: []
-    synthesis: []
-    worker-defaults:
-      - list_directory
-      - read_file
-    workers:
-      analysis:
-        - list_directory
-        - read_file
-      research:
-        - list_directory
-        - read_file
-      design:
-        - list_directory
-        - read_file
-      engineering:
-        - list_directory
-        - read_file
-      implementer:
-        - list_directory
-        - read_file
-        - write_file
-      qa:
-        - list_directory
-        - read_file
-      writing:
-        - list_directory
-        - read_file
-      general:
-        - list_directory
-        - read_file
+  skill-planning:
+    default-skill-budget: 3
 
 

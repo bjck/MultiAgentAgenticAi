@@ -14,19 +14,25 @@ import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 @Configuration
 @Slf4j
 public class RestClientConfig {
 
-    private static final org.slf4j.Logger httpLogger = org.slf4j.LoggerFactory.getLogger("com.bko.http.logging");
+    /** Connect timeout for AI provider HTTP calls (e.g. Gemini, OpenAI). */
+    private static final int CONNECT_TIMEOUT_SECONDS = 30;
+    /** Read timeout for AI provider HTTP calls; should be >= worker-timeout for long tool-calling flows. */
+    private static final int READ_TIMEOUT_SECONDS = 120;
 
     @Bean
     public RestClientCustomizer restClientCustomizer() {
         return restClientBuilder -> {
             restClientBuilder.requestInterceptor(new LoggingRequestInterceptor());
-            // BufferingClientHttpRequestFactory allows multiple reads of the response body
-            restClientBuilder.requestFactory(new BufferingClientHttpRequestFactory(new SimpleClientHttpRequestFactory()));
+            SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+            factory.setConnectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS));
+            factory.setReadTimeout(Duration.ofSeconds(READ_TIMEOUT_SECONDS));
+            restClientBuilder.requestFactory(new BufferingClientHttpRequestFactory(factory));
         };
     }
 
@@ -52,28 +58,34 @@ public class RestClientConfig {
         }
 
         private void logRequest(HttpRequest request, byte[] body) {
-            httpLogger.info("--- HTTP Request ---");
-            httpLogger.info("URI: {} {}", request.getMethod(), request.getURI());
-            httpLogger.info("Headers: {}", request.getHeaders());
-            if (body.length > 0) {
-                httpLogger.info("Body: {}", new String(body, StandardCharsets.UTF_8));
+            if (!httpLogger.isDebugEnabled()) {
+                return;
             }
-            httpLogger.info("--------------------");
+            httpLogger.debug("HTTP request: {} {}", request.getMethod(), request.getURI());
+            if (httpLogger.isTraceEnabled()) {
+                httpLogger.trace("Request headers: {}", request.getHeaders());
+                if (body.length > 0) {
+                    httpLogger.trace("Request body: {}", new String(body, StandardCharsets.UTF_8));
+                }
+            }
         }
 
         private void logResponse(ClientHttpResponse response) throws IOException {
-            httpLogger.info("--- HTTP Response ---");
+            if (!httpLogger.isDebugEnabled()) {
+                return;
+            }
             try {
-                httpLogger.info("Status: {}", response.getStatusCode());
+                httpLogger.debug("HTTP response status: {}", response.getStatusCode());
             } catch (IOException e) {
-                httpLogger.info("Status: Unknown");
+                httpLogger.debug("HTTP response status: Unknown");
             }
-            httpLogger.info("Headers: {}", response.getHeaders());
-            byte[] body = StreamUtils.copyToByteArray(response.getBody());
-            if (body.length > 0) {
-                httpLogger.info("Body: {}", new String(body, StandardCharsets.UTF_8));
+            if (httpLogger.isTraceEnabled()) {
+                httpLogger.trace("Response headers: {}", response.getHeaders());
+                byte[] body = StreamUtils.copyToByteArray(response.getBody());
+                if (body.length > 0) {
+                    httpLogger.trace("Response body: {}", new String(body, StandardCharsets.UTF_8));
+                }
             }
-            httpLogger.info("---------------------");
         }
     }
 }

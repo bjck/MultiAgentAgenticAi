@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true">
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="multiagent"/>
+    <springProperty scope="context" name="logLevelRoot" source="logging.level.root" defaultValue="INFO"/>
+    <springProperty scope="context" name="logLevelAi" source="logging.level.org.springframework.ai" defaultValue="WARN"/>
+    <springProperty scope="context" name="logLevelHttp" source="logging.level.com.bko.http.logging" defaultValue="WARN"/>
+    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"app":"${appName}"}</customFields>
+            <includeMdc>true</includeMdc>
+            <includeStructuredArguments>true</includeStructuredArguments>
+        </encoder>
+    </appender>
+
+    <logger name="org.springframework.ai" level="${logLevelAi}"/>
+    <logger name="com.bko.http.logging" level="${logLevelHttp}"/>
+
+    <root level="${logLevelRoot}">
+        <appender-ref ref="CONSOLE_JSON"/>
+    </root>
+</configuration>

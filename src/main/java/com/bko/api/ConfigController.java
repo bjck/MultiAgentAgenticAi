@@ -4,7 +4,10 @@ import com.bko.config.AgentSkill;
 import com.bko.config.AgentSkillsConfig;
 import com.bko.config.MultiAgentProperties;
 import com.bko.config.MultiAgentProperties.RoleExecutionConfig;
+import com.bko.entity.PhaseType;
+import com.bko.repository.AgentRoleRepository;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -14,9 +17,12 @@ import java.util.Map;
 public class ConfigController {
 
     private final MultiAgentProperties properties;
+    private final AgentRoleRepository agentRoleRepository;
 
-    public ConfigController(MultiAgentProperties properties) {
+    public ConfigController(MultiAgentProperties properties,
+                            AgentRoleRepository agentRoleRepository) {
         this.properties = properties;
+        this.agentRoleRepository = agentRoleRepository;
     }
 
     @GetMapping("/skills")
@@ -27,17 +33,18 @@ public class ConfigController {
                 skills.getSynthesis(),
                 skills.getWorkerDefaults(),
                 skills.getWorkers(),
-                properties.getWorkerRoles()
+                workerRoles()
         );
     }
 
     @GetMapping("/role-settings")
     public RoleSettingsResponse getRoleSettings() {
         Map<String, RoleExecutionConfig> merged = new java.util.LinkedHashMap<>();
-        for (String role : properties.getWorkerRoles()) {
+        for (String role : workerRoles()) {
             merged.put(role, properties.getRoleExecutionConfig(role));
         }
-        return new RoleSettingsResponse(merged, properties.getRoleExecutionDefaults(), properties.getWorkerRoles());
+        List<String> roles = workerRoles();
+        return new RoleSettingsResponse(merged, properties.getRoleExecutionDefaults(), roles);
     }
 
     @PutMapping("/role-settings")
@@ -83,6 +90,7 @@ public class ConfigController {
         return properties.getSkills().getWorkers().get(role.toLowerCase());
     }
 
+
     public record SkillsResponse(
             List<AgentSkill> orchestrator,
             List<AgentSkill> synthesis,
@@ -101,4 +109,13 @@ public class ConfigController {
             RoleExecutionConfig defaults,
             List<String> workerRoles
     ) {}
+
+    private List<String> workerRoles() {
+        return agentRoleRepository.findByPhaseAndActiveTrueOrderByCodeAsc(PhaseType.WORKER).stream()
+                .map(role -> role.getCode() == null ? "" : role.getCode().trim())
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+    }
+
 }

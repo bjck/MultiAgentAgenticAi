@@ -1,5 +1,8 @@
 package com.bko.api;
 
+import com.bko.files.FileContent;
+import com.bko.files.FileListing;
+import com.bko.files.FileService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -23,11 +26,11 @@ class FileControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private com.bko.files.FileService fileService;
+    private FileService fileService;
 
     @Test
     void testListFiles() throws Exception {
-        when(fileService.list(any())).thenReturn(new com.bko.files.FileListing("test", List.of()));
+        when(fileService.list(any())).thenReturn(new FileListing("test", List.of()));
 
         mockMvc.perform(get("/api/files"))
                 .andExpect(status().isOk())
@@ -38,8 +41,8 @@ class FileControllerTest {
     void testWriteAndReadFile() throws Exception {
         String content = "{\"path\": \"test-api-file.txt\", \"content\": \"Hello API\"}";
 
-        when(fileService.write(anyString(), anyString())).thenReturn(new com.bko.files.FileContent("test-api-file.txt", "Hello API"));
-        when(fileService.read(anyString())).thenReturn(new com.bko.files.FileContent("test-api-file.txt", "Hello API"));
+        when(fileService.write(anyString(), anyString())).thenReturn(new FileContent("test-api-file.txt", "Hello API"));
+        when(fileService.read(anyString())).thenReturn(new FileContent("test-api-file.txt", "Hello API"));
 
         mockMvc.perform(post("/api/files/content")
                         .contentType(MediaType.APPLICATION_JSON)

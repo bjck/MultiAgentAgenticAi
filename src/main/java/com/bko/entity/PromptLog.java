@@ -3,12 +3,14 @@ package com.bko.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.DynamicInsert;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Entity
 @Table(name = "prompt_log")
+@DynamicInsert
 @Getter
 @Setter
 @NoArgsConstructor
@@ -38,6 +40,18 @@ public class PromptLog {
 
     @Column(name = "full_response", columnDefinition = "TEXT")
     private String fullResponse;
+
+    /**
+     * Input (prompt) token count from the model API when available; null if not reported.
+     */
+    @Column(name = "input_token_count")
+    private Integer inputTokenCount;
+
+    /**
+     * Output (completion) token count from the model API when available; null if not reported.
+     */
+    @Column(name = "output_token_count")
+    private Integer outputTokenCount;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

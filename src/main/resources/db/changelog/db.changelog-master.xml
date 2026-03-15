@@ -7,5 +7,13 @@
     <include file="db/changelog/01-create-schema.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/02-add-orchestration-logging.xml" relativeToChangelogFile="false"/>
     <include file="db/changelog/03-add-tool-call-logging.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/04-add-skill-planning.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/05-add-mcp-and-docs.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/06-add-scheduled-agents.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/07-add-external-document-search-tool.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/08-drop-roles-skills-and-scheduled-agents.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/09-restore-scheduled-agents.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/10-ensure-orchestration-tables.xml" relativeToChangelogFile="false"/>
+    <include file="db/changelog/11-prompt-log-token-counts.xml" relativeToChangelogFile="false"/>
 
 </databaseChangeLog>

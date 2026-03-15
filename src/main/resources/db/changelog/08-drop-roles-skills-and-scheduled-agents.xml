@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.24.xsd">
+
+    <!-- Drop foreign keys and columns that reference scheduled agents from external_document -->
+    <changeSet id="08-drop-external-document-agent-fks" author="cursor">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="external_document"/>
+        </preConditions>
+
+        <dropForeignKeyConstraint baseTableName="external_document"
+                                  constraintName="fk_external_document_agent"/>
+        <dropForeignKeyConstraint baseTableName="external_document"
+                                  constraintName="fk_external_document_agent_run"/>
+
+        <dropIndex tableName="external_document" indexName="ix_external_document_agent"/>
+        <dropIndex tableName="external_document" indexName="ix_external_document_agent_run"/>
+
+        <dropColumn tableName="external_document" columnName="agent_id"/>
+        <dropColumn tableName="external_document" columnName="agent_run_id"/>
+    </changeSet>
+
+    <!-- Drop role/skill/tool-policy tables and scheduled agent tables -->
+    <changeSet id="08-drop-roles-skills-and-scheduled-agents" author="cursor">
+        <!-- Drop tables that depend on others first -->
+        <preConditions onFail="MARK_RAN">
+            <or>
+                <tableExists tableName="role_skill"/>
+                <tableExists tableName="role_tool_policy"/>
+                <tableExists tableName="scheduled_agent_run"/>
+                <tableExists tableName="scheduled_agent"/>
+                <tableExists tableName="skill"/>
+                <tableExists tableName="tool"/>
+                <tableExists tableName="agent_role"/>
+            </or>
+        </preConditions>
+
+        <!-- Role/skill relationships -->
+        <dropTable tableName="role_skill" cascadeConstraints="true"/>
+
+        <!-- Tool policies -->
+        <dropTable tableName="role_tool_policy" cascadeConstraints="true"/>
+
+        <!-- Scheduled agents -->
+        <dropTable tableName="scheduled_agent_run" cascadeConstraints="true"/>
+        <dropTable tableName="scheduled_agent" cascadeConstraints="true"/>
+
+        <!-- Core role/skill tables and tool catalog -->
+        <dropTable tableName="skill" cascadeConstraints="true"/>
+        <dropTable tableName="tool" cascadeConstraints="true"/>
+        <dropTable tableName="agent_role" cascadeConstraints="true"/>
+    </changeSet>
+
+</databaseChangeLog>
+

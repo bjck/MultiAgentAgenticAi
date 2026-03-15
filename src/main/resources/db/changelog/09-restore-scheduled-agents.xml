@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.24.xsd">
+
+    <!-- Re-create scheduled_agent tables if they were dropped by 08 (so app and Agent Library keep working). -->
+    <changeSet id="09-restore-scheduled-agent" author="cursor">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="scheduled_agent"/>
+            </not>
+        </preConditions>
+        <createTable tableName="scheduled_agent">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="objective_prompt" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="schedule_expression" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="raw_schedule_input" type="TEXT"/>
+            <column name="enabled" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="default_provider" type="TEXT"/>
+            <column name="default_model" type="TEXT"/>
+            <column name="tags" type="TEXT"/>
+            <column name="last_run_at" type="TIMESTAMPTZ"/>
+            <column name="next_run_at" type="TIMESTAMPTZ"/>
+            <column name="token_limit_per_run" type="BIGINT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="scheduled_agent" indexName="ix_scheduled_agent_next_run">
+            <column name="enabled"/>
+            <column name="next_run_at"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="09-restore-scheduled-agent-run" author="cursor">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="scheduled_agent"/>
+            <not>
+                <tableExists tableName="scheduled_agent_run"/>
+            </not>
+        </preConditions>
+        <createTable tableName="scheduled_agent_run">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="agent_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="started_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="completed_at" type="TIMESTAMPTZ"/>
+            <column name="status" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="error_message" type="TEXT"/>
+            <column name="effective_prompt" type="TEXT"/>
+            <column name="session_id" type="UUID"/>
+        </createTable>
+        <addForeignKeyConstraint baseTableName="scheduled_agent_run" baseColumnNames="agent_id"
+                                 referencedTableName="scheduled_agent" referencedColumnNames="id"
+                                 onDelete="CASCADE" constraintName="fk_scheduled_agent_run_agent"/>
+        <createIndex tableName="scheduled_agent_run" indexName="ix_scheduled_agent_run_agent">
+            <column name="agent_id"/>
+        </createIndex>
+        <createIndex tableName="scheduled_agent_run" indexName="ix_scheduled_agent_run_started_at">
+            <column name="started_at"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

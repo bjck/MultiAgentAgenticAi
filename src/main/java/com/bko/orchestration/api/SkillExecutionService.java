@@ -18,7 +18,6 @@ public interface SkillExecutionService {
      * @param session The current orchestration session.
      * @param userMessage The message from the user, providing context or instructions.
      * @param task The {@link TaskSpec} defining the task to be executed.
-     * @param requiresEdits Indicates if the task execution might require subsequent edits or refinements.
      * @param context Additional context relevant to the task execution.
      * @param provider The AI model provider to use for the worker.
      * @param model The specific AI model to use.
@@ -28,17 +27,31 @@ public interface SkillExecutionService {
      * @param streamId An optional stream ID for real-time event emission.
      * @return A {@link WorkerResult} containing the outcome of the worker's execution.
      */
+    default WorkerResult runWorker(OrchestrationSession session,
+                                   String userMessage,
+                                   TaskSpec task,
+                                   @Nullable String context,
+                                   String provider,
+                                   String model,
+                                   boolean includeHandoffSchema,
+                                   boolean requireToolCalls,
+                                   @Nullable TaskLog taskLog,
+                                   @Nullable String streamId) {
+        return runWorker(session, userMessage, task, context, provider, model,
+                includeHandoffSchema, requireToolCalls, taskLog, streamId, null);
+    }
+
     WorkerResult runWorker(OrchestrationSession session,
                            String userMessage,
                            TaskSpec task,
-                           boolean requiresEdits,
                            @Nullable String context,
                            String provider,
                            String model,
                            boolean includeHandoffSchema,
                            boolean requireToolCalls,
                            @Nullable TaskLog taskLog,
-                           @Nullable String streamId);
+                           @Nullable String streamId,
+                           @Nullable java.util.List<com.bko.config.AgentSkill> selectedSkills);
 
     /**
      * Runs a collaborative task involving multiple agents or steps.
@@ -46,7 +59,6 @@ public interface SkillExecutionService {
      * @param session The current orchestration session.
      * @param userMessage The message from the user, providing context or instructions.
      * @param task The {@link TaskSpec} defining the collaborative task.
-     * @param requiresEdits Indicates if the task execution might require subsequent edits or refinements.
      * @param baseContext The base context for the collaborative task.
      * @param provider The AI model provider to use.
      * @param model The specific AI model to use.
@@ -57,7 +69,6 @@ public interface SkillExecutionService {
     WorkerResult runCollaborativeTask(OrchestrationSession session,
                                       String userMessage,
                                       TaskSpec task,
-                                      boolean requiresEdits,
                                       @Nullable String baseContext,
                                       String provider,
                                       String model,

@@ -6,20 +6,23 @@ import com.bko.config.MultiAgentProperties;
 import com.bko.entity.OrchestrationSession;
 import com.bko.orchestration.api.AgentInvocationService;
 import com.bko.orchestration.api.StatePersistenceService;
-import com.bko.orchestration.collaboration.CollaborationStage;
-import com.bko.orchestration.collaboration.CollaborationStrategy;
 import com.bko.orchestration.model.OrchestratorPlan;
-import com.bko.orchestration.model.RoleSelection;
+import com.bko.orchestration.model.SkillSelection;
+import com.bko.orchestration.model.SkillSummary;
 import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.WorkerResult;
 import com.bko.files.FileService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.google.genai.GoogleGenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -33,8 +36,8 @@ import java.util.Map;
 @Slf4j
 public class AgentInvocationServiceImpl implements AgentInvocationService {
 
-    private final ChatClient chatClient;
-    private final ChatClient openAiChatClient;
+    private final GoogleGenAiChatModel googleGenAiChatModel;
+    private final ObjectProvider<OpenAiChatModel> openAiChatModelProvider;
     private final MultiAgentProperties properties;
     private final ToolCallbackProvider toolCallbackProvider;
     private final ToolAccessPolicy toolAccessPolicy;
@@ -45,8 +48,8 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
     private final OrchestrationMetricsService metricsService;
     private final FileService fileService;
 
-    public AgentInvocationServiceImpl(ChatClient chatClient,
-                                      @Qualifier("openAiChatClient") ObjectProvider<ChatClient> openAiChatClientProvider,
+    public AgentInvocationServiceImpl(GoogleGenAiChatModel googleGenAiChatModel,
+                                      ObjectProvider<OpenAiChatModel> openAiChatModelProvider,
                                       MultiAgentProperties properties,
                                       ToolCallbackProvider toolCallbackProvider,
                                       ToolAccessPolicy toolAccessPolicy,
@@ -56,8 +59,8 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
                                       StatePersistenceService persistenceService,
                                       OrchestrationMetricsService metricsService,
                                       FileService fileService) {
-        this.chatClient = chatClient;
-        this.openAiChatClient = openAiChatClientProvider.getIfAvailable();
+        this.googleGenAiChatModel = googleGenAiChatModel;
+        this.openAiChatModelProvider = openAiChatModelProvider;
         this.properties = properties;
         this.toolCallbackProvider = toolCallbackProvider;
         this.toolAccessPolicy = toolAccessPolicy;
@@ -72,43 +75,49 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
     @Override
     public OrchestratorPlan requestPlan(OrchestrationSession session,
                                         String userMessage,
-                                        boolean requiresEdits,
                                         List<String> allowedRoles,
                                         @Nullable String context,
                                         String provider,
                                         String model) {
         try {
             String registry = orchestrationContextService.buildRoleRegistry(allowedRoles);
-            String systemPrompt = orchestrationPromptService.orchestratorSystemPrompt(requiresEdits, allowedRoles, registry);
+            String systemPrompt = orchestrationPromptService.orchestratorSystemPrompt(allowedRoles, registry);
             String normalizedContext = orchestrationContextService.defaultContext(context);
             metricsService.recordLlmRequest(PURPOSE_PLAN, null);
-            String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+            // Plan without toolCallbacks to avoid Spring AI building an empty advisor chain (No CallAdvisors)
+            var callSpec = getChatRequestSpec(provider, model)
                     .system(systemPrompt)
                     .user(user -> user.text(ORCHESTRATOR_USER_TEMPLATE)
                             .param("input", userMessage)
                             .param("context", normalizedContext))
-                    .call()
-                    .content();
+                    .call();
+            ChatResponse chatResponse = callSpec.chatResponse();
+            String response = extractContent(chatResponse);
+            var usage = extractUsage(chatResponse);
             persistenceService.logPrompt(session, PURPOSE_PLAN, null, systemPrompt, ORCHESTRATOR_USER_TEMPLATE,
-                    Map.of("input", userMessage, "context", normalizedContext), response);
+                    Map.of("input", userMessage, "context", normalizedContext), response, usage[0], usage[1]);
             OrchestratorPlan plan = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN, response, OrchestratorPlan.class);
             if (plan == null) {
                 String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
                 metricsService.recordLlmRequest(PURPOSE_PLAN_RETRY, null);
-                String retryResponse = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+                var retryCallSpec = getChatRequestSpec(provider, model)
                         .system(retryPrompt)
                         .user(user -> user.text(ORCHESTRATOR_USER_TEMPLATE)
                                 .param("input", userMessage)
                                 .param("context", normalizedContext))
-                        .call()
-                        .content();
+                        .call();
+                ChatResponse retryChatResponse = retryCallSpec.chatResponse();
+                String retryResponse = extractContent(retryChatResponse);
+                var retryUsage = extractUsage(retryChatResponse);
                 persistenceService.logPrompt(session, PURPOSE_PLAN_RETRY, null, retryPrompt, ORCHESTRATOR_USER_TEMPLATE,
-                        Map.of("input", userMessage, "context", normalizedContext), retryResponse);
+                        Map.of("input", userMessage, "context", normalizedContext), retryResponse, retryUsage[0], retryUsage[1]);
                 plan = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_RETRY, retryResponse, OrchestratorPlan.class);
             }
             metricsService.recordPlanResponse(PURPOSE_PLAN, plan);
             return plan;
         } catch (Exception ex) {
+            log.error("Failed to request orchestrator plan. sessionId={}, provider={}, model={}",
+                    session != null ? session.getId() : null, provider, model, ex);
             return null;
         }
     }
@@ -116,7 +125,6 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
     @Override
     public OrchestratorPlan requestContinuationPlan(OrchestrationSession session,
                                                     String userMessage,
-                                                    boolean requiresEdits,
                                                     List<String> allowedRoles,
                                                     @Nullable String context,
                                                     @Nullable String errorSummary,
@@ -125,13 +133,13 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
                                                     String provider,
                                                     String model) {
         try {
-            String systemPrompt = orchestrationPromptService.executionReviewPrompt(requiresEdits, allowedRoles);
+            String systemPrompt = orchestrationPromptService.executionReviewPrompt(allowedRoles);
             String normalizedContext = orchestrationContextService.defaultContext(context);
             String planJson = jsonProcessingService.toJson(plan);
             String resultsJson = jsonProcessingService.toJson(results);
             String normalizedErrors = StringUtils.hasText(errorSummary) ? errorSummary : "None.";
             metricsService.recordLlmRequest(PURPOSE_PLAN_REVIEW, null);
-            String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+            var callSpec = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                     .system(systemPrompt)
                     .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
                             .param("input", userMessage)
@@ -139,16 +147,18 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
                             .param("errors", normalizedErrors)
                             .param("plan", planJson)
                             .param("results", resultsJson))
-                    .call()
-                    .content();
+                    .call();
+            ChatResponse chatResponse = callSpec.chatResponse();
+            String response = extractContent(chatResponse);
+            var usage = extractUsage(chatResponse);
             persistenceService.logPrompt(session, PURPOSE_PLAN_REVIEW, null, systemPrompt, EXECUTION_REVIEW_USER_TEMPLATE,
                     Map.of("input", userMessage, "context", normalizedContext, "errors", normalizedErrors,
-                            "plan", planJson, "results", resultsJson), response);
+                            "plan", planJson, "results", resultsJson), response, usage[0], usage[1]);
             OrchestratorPlan continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW, response, OrchestratorPlan.class);
             if (continuation == null) {
                 String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
                 metricsService.recordLlmRequest(PURPOSE_PLAN_REVIEW_RETRY, null);
-                String retryResponse = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+                var retryCallSpec = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                         .system(retryPrompt)
                         .user(user -> user.text(EXECUTION_REVIEW_USER_TEMPLATE)
                                 .param("input", userMessage)
@@ -156,62 +166,95 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
                                 .param("errors", normalizedErrors)
                                 .param("plan", planJson)
                                 .param("results", resultsJson))
-                        .call()
-                        .content();
+                        .call();
+                ChatResponse retryChatResponse = retryCallSpec.chatResponse();
+                String retryResponse = extractContent(retryChatResponse);
+                var retryUsage = extractUsage(retryChatResponse);
                 persistenceService.logPrompt(session, PURPOSE_PLAN_REVIEW_RETRY, null, retryPrompt, EXECUTION_REVIEW_USER_TEMPLATE,
                         Map.of("input", userMessage, "context", normalizedContext, "errors", normalizedErrors,
-                                "plan", planJson, "results", resultsJson), retryResponse);
+                                "plan", planJson, "results", resultsJson), retryResponse, retryUsage[0], retryUsage[1]);
                 continuation = jsonProcessingService.parseJsonResponse(PURPOSE_PLAN_REVIEW_RETRY, retryResponse, OrchestratorPlan.class);
             }
             metricsService.recordPlanResponse(PURPOSE_PLAN_REVIEW, continuation);
             return continuation;
         } catch (Exception ex) {
+            log.error("Failed to request continuation plan. sessionId={}, provider={}, model={}",
+                    session != null ? session.getId() : null, provider, model, ex);
             return null;
         }
     }
 
     @Override
-    public RoleSelection requestRoleSelection(OrchestrationSession session,
-                                              String userMessage,
-                                              boolean requiresEdits,
-                                              List<String> availableRoles,
-                                              @Nullable String context,
-                                              String provider,
-                                              String model) {
-        String registry = orchestrationContextService.buildRoleRegistry(availableRoles);
+    public SkillSelection requestSkillSelection(OrchestrationSession session,
+                                                String userMessage,
+                                                TaskSpec task,
+                                                List<SkillSummary> skills,
+                                                int budget,
+                                                @Nullable String context,
+                                                String provider,
+                                                String model) {
+        String skillsList = renderSkillList(skills);
+        String systemPrompt = SKILL_PLANNER_SYSTEM_PROMPT.formatted(budget);
+        String normalizedContext = orchestrationContextService.defaultContext(context);
         try {
-            String systemPrompt = orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles);
-            String normalizedContext = orchestrationContextService.defaultContext(context);
-            metricsService.recordLlmRequest(PURPOSE_ROLE_SELECTION, null);
-            String response = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+            metricsService.recordLlmRequest(PURPOSE_SKILL_PLAN, task != null ? task.role() : null);
+            var callSpec = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                     .system(systemPrompt)
-                    .user(user -> user.text(ROLE_SELECTION_USER_TEMPLATE)
+                    .user(user -> user.text(SKILL_PLANNER_USER_TEMPLATE)
                             .param("input", userMessage)
-                            .param("context", normalizedContext)
-                            .param("roles", registry))
-                    .call()
-                    .content();
-            persistenceService.logPrompt(session, PURPOSE_ROLE_SELECTION, null, systemPrompt, ROLE_SELECTION_USER_TEMPLATE,
-                    Map.of("input", userMessage, "context", normalizedContext, "roles", registry), response);
-            RoleSelection selection = jsonProcessingService.parseJsonResponse(PURPOSE_ROLE_SELECTION, response, RoleSelection.class);
+                            .param("task", task != null ? task.description() : "")
+                            .param("expectedOutput", task != null ? task.expectedOutput() : "")
+                            .param("budget", String.valueOf(budget))
+                            .param("skills", skillsList))
+                    .call();
+            ChatResponse chatResponse = callSpec.chatResponse();
+            String response = extractContent(chatResponse);
+            var usage = extractUsage(chatResponse);
+            persistenceService.logPrompt(session, PURPOSE_SKILL_PLAN, task != null ? task.role() : null, systemPrompt,
+                    SKILL_PLANNER_USER_TEMPLATE,
+                    Map.of("input", userMessage,
+                            "task", task != null ? task.description() : "",
+                            "expectedOutput", task != null ? task.expectedOutput() : "",
+                            "budget", String.valueOf(budget),
+                            "skills", skillsList,
+                            "context", normalizedContext),
+                    response, usage[0], usage[1]);
+            SkillSelection selection = jsonProcessingService.parseJsonResponse(PURPOSE_SKILL_PLAN, response, SkillSelection.class);
             if (selection == null) {
-                String retryPrompt = orchestrationPromptService.roleSelectionPrompt(requiresEdits, availableRoles)
-                        + INVALID_JSON_RETRY_PROMPT;
-                metricsService.recordLlmRequest(PURPOSE_ROLE_SELECTION_RETRY, null);
-                String retryResponse = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
+                String retryPrompt = systemPrompt + INVALID_JSON_RETRY_PROMPT;
+                metricsService.recordLlmRequest(PURPOSE_SKILL_PLAN_RETRY, task != null ? task.role() : null);
+                var retryCallSpec = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.ORCHESTRATOR, null)
                         .system(retryPrompt)
-                        .user(user -> user.text(ROLE_SELECTION_USER_TEMPLATE)
+                        .user(user -> user.text(SKILL_PLANNER_USER_TEMPLATE)
                                 .param("input", userMessage)
-                                .param("context", normalizedContext)
-                                .param("roles", registry))
-                        .call()
-                        .content();
-                persistenceService.logPrompt(session, PURPOSE_ROLE_SELECTION_RETRY, null, retryPrompt, ROLE_SELECTION_USER_TEMPLATE,
-                        Map.of("input", userMessage, "context", normalizedContext, "roles", registry), retryResponse);
-                selection = jsonProcessingService.parseJsonResponse(PURPOSE_ROLE_SELECTION_RETRY, retryResponse, RoleSelection.class);
+                                .param("task", task != null ? task.description() : "")
+                                .param("expectedOutput", task != null ? task.expectedOutput() : "")
+                                .param("budget", String.valueOf(budget))
+                                .param("skills", skillsList))
+                        .call();
+                ChatResponse retryChatResponse = retryCallSpec.chatResponse();
+                String retryResponse = extractContent(retryChatResponse);
+                var retryUsage = extractUsage(retryChatResponse);
+                persistenceService.logPrompt(session, PURPOSE_SKILL_PLAN_RETRY, task != null ? task.role() : null, retryPrompt,
+                        SKILL_PLANNER_USER_TEMPLATE,
+                        Map.of("input", userMessage,
+                                "task", task != null ? task.description() : "",
+                                "expectedOutput", task != null ? task.expectedOutput() : "",
+                                "budget", String.valueOf(budget),
+                                "skills", skillsList,
+                                "context", normalizedContext),
+                        retryResponse, retryUsage[0], retryUsage[1]);
+                selection = jsonProcessingService.parseJsonResponse(PURPOSE_SKILL_PLAN_RETRY, retryResponse, SkillSelection.class);
             }
             return selection;
         } catch (Exception ex) {
+            log.error("Failed to request skill selection. sessionId={}, taskId={}, role={}, provider={}, model={}",
+                    session != null ? session.getId() : null,
+                    task != null ? task.id() : null,
+                    task != null ? task.role() : null,
+                    provider,
+                    model,
+                    ex);
             return null;
         }
     }
@@ -227,85 +270,71 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
                                             ToolAccessPolicy.Phase phase) {
         ToolCallAudit audit = new ToolCallAudit(task.role(), task.id());
         metricsService.recordLlmRequest(PURPOSE_WORKER_TASK, task.role());
-        String output = applyTools(getChatRequestSpec(provider, model), phase, task.role(), audit)
+        var callSpec = applyTools(getChatRequestSpec(provider, model), phase, task.role(), audit)
                 .system(systemPrompt)
                 .user(user -> user.text(WORKER_USER_TEMPLATE)
                         .param("input", userMessage)
                         .param("context", normalizedContext)
                         .param("task", task.description())
                         .param("expectedOutput", task.expectedOutput()))
-                .call()
-                .content();
-        return new WorkerCallResult(output == null ? "" : output, audit);
+                .call();
+        ChatResponse chatResponse = callSpec.chatResponse();
+        String output = extractContent(chatResponse);
+        var usage = extractUsage(chatResponse);
+        return new WorkerCallResult(output == null ? "" : output, audit, usage[0], usage[1]);
     }
 
-    @Override
-    public String collaborateRound(OrchestrationSession session,
-                                   String userMessage,
-                                   TaskSpec task,
-                                   int round,
-                                   CollaborationStage stage,
-                                   CollaborationStrategy strategy,
-                                   boolean finalStage,
-                                   List<WorkerResult> results,
-                                   String provider,
-                                   String model) {
-        String systemPrompt = orchestrationPromptService.collaborationSystemPrompt(task.role(), strategy, stage, finalStage);
-        String resultsJson = jsonProcessingService.toJson(results);
-        String output = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.SYNTHESIS, null)
-                .system(systemPrompt)
-                .user(user -> user.text(COLLABORATION_USER_TEMPLATE)
-                        .param("input", userMessage)
-                        .param("task", task.description())
-                        .param("round", String.valueOf(round))
-                        .param("strategy", strategy != null ? strategy.label() : "Simple summary")
-                        .param("stage", stage != null ? stage.label() : "Summary")
-                        .param("results", resultsJson))
-                .call()
-                .content();
-        return output != null ? output : "";
+    private static String extractContent(@Nullable ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getResult() == null || chatResponse.getResult().getOutput() == null) {
+            return "";
+        }
+        String text = chatResponse.getResult().getOutput().getText();
+        return text == null ? "" : text;
     }
 
-    @Override
-    public String synthesize(OrchestrationSession session,
-                             String userMessage,
-                             OrchestratorPlan plan,
-                             List<WorkerResult> results,
-                             String provider,
-                             String model) {
-        String planJson = jsonProcessingService.toJson(plan);
-        String resultsJson = jsonProcessingService.toJson(results);
-        metricsService.recordLlmRequest(PURPOSE_SYTHESIS, null);
-        String systemPrompt = orchestrationPromptService.synthesisSystemPrompt();
-        String out = applyTools(getChatRequestSpec(provider, model), ToolAccessPolicy.Phase.SYNTHESIS, null)
-                .system(systemPrompt)
-                .user(user -> user.text(SYNTHESIS_USER_TEMPLATE)
-                        .param("input", userMessage)
-                        .param("plan", planJson)
-                        .param("results", resultsJson))
-                .call()
-                .content();
-        persistenceService.logPrompt(session, PURPOSE_SYTHESIS, null, systemPrompt, SYNTHESIS_USER_TEMPLATE,
-                Map.of("input", userMessage, "plan", planJson, "results", resultsJson), out);
-        return out;
+    /**
+     * Extracts [inputTokens, outputTokens] from the chat response metadata when available.
+     * Returns [null, null] if usage is not present.
+     */
+    private static Integer[] extractUsage(ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getMetadata() == null) {
+            return new Integer[]{null, null};
+        }
+        Usage usage = chatResponse.getMetadata().getUsage();
+        if (usage == null) {
+            return new Integer[]{null, null};
+        }
+        return new Integer[]{
+                usage.getPromptTokens() != null ? usage.getPromptTokens() : null,
+                usage.getCompletionTokens() != null ? usage.getCompletionTokens() : null
+        };
     }
 
+    /**
+     * Build a fresh ChatClient for this request. Callers must consume the response only once
+     * (e.g. chatResponse()) to avoid exhausting the advisor chain.
+     */
     private ChatClient.ChatClientRequestSpec getChatRequestSpec(String provider, String model) {
         String activeProvider = StringUtils.hasText(provider) ? provider.toUpperCase() : properties.getAiProvider().name();
         String activeModel = StringUtils.hasText(model) ? model : properties.getOpenai().getModel();
 
+        ChatModel chatModel;
         if ("OPENAI".equals(activeProvider)) {
-            if (openAiChatClient == null) {
+            OpenAiChatModel openAi = openAiChatModelProvider.getIfAvailable();
+            if (openAi == null) {
                 throw new IllegalStateException("OpenAI provider is not properly configured. "
                         + "Check that you have a valid API key or a custom Base URL in your configuration.");
             }
-            var spec = openAiChatClient.prompt();
-            if (StringUtils.hasText(activeModel)) {
-                spec = spec.options(OpenAiChatOptions.builder().model(activeModel).build());
-            }
-            return spec;
+            chatModel = openAi;
+        } else {
+            chatModel = googleGenAiChatModel;
         }
-        return chatClient.prompt();
+        ChatClient client = ChatClient.builder(chatModel).build();
+        var spec = client.prompt();
+        if ("OPENAI".equals(activeProvider) && StringUtils.hasText(activeModel)) {
+            spec = spec.options(OpenAiChatOptions.builder().model(activeModel).build());
+        }
+        return spec;
     }
 
     private ChatClient.ChatClientRequestSpec applyTools(ChatClient.ChatClientRequestSpec prompt,
@@ -326,8 +355,10 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
         if (rawCallbacks == null || rawCallbacks.length == 0) {
             log.warn("No tool callbacks registered from provider. phase={}, role={}", phase, role);
         }
-        var allowed = toolAccessPolicy.allowedToolNames(phase, role);
-        ToolCallbackProvider filtered = new FilteringToolCallbackProvider(toolCallbackProvider, allowed);
+        var allowed = toolAccessPolicy.allowedToolNames();
+        ToolCallbackProvider filtered = allowed.isEmpty()
+                ? toolCallbackProvider
+                : new FilteringToolCallbackProvider(toolCallbackProvider, allowed);
         ToolCallbackProvider effective = audit == null ? filtered : auditedToolCallbackProvider(filtered, audit);
         ToolCallback[] callbacks = effective.getToolCallbacks();
         if (callbacks == null || callbacks.length == 0) {
@@ -335,7 +366,9 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
                 log.warn("No tool callbacks available after filtering. phase={}, role={}, allowed={}, available={}",
                         phase, role, allowed, describeToolNames(rawCallbacks));
             }
-        } else if (log.isDebugEnabled()) {
+            return prompt;
+        }
+        if (log.isDebugEnabled()) {
             log.debug("Tool callbacks available. phase={}, role={}, tools={}",
                     phase, role, describeToolNames(callbacks));
         }
@@ -416,5 +449,23 @@ public class AgentInvocationServiceImpl implements AgentInvocationService {
             }
         }
         return "";
+    }
+
+    private String renderSkillList(List<SkillSummary> skills) {
+        if (skills == null || skills.isEmpty()) {
+            return "None.";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (SkillSummary skill : skills) {
+            if (skill == null || !StringUtils.hasText(skill.name())) {
+                continue;
+            }
+            sb.append("- ").append(skill.name());
+            if (StringUtils.hasText(skill.description())) {
+                sb.append(": ").append(skill.description().trim());
+            }
+            sb.append("\n");
+        }
+        return sb.toString().trim();
     }
 }

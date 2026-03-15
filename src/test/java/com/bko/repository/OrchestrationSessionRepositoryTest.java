@@ -3,11 +3,13 @@ package com.bko.repository;
 import com.bko.entity.OrchestrationSession;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@EnabledIfDockerAvailable
 class OrchestrationSessionRepositoryTest extends BaseRepositoryTest {
 
     @Autowired

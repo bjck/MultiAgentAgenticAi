@@ -12,14 +12,13 @@ public class MultiAgentProperties {
 
     private int maxTasks = 4;
     private int workerConcurrency = 4;
-    private Duration workerTimeout = Duration.ofSeconds(90);
+    private Duration workerTimeout = Duration.ofSeconds(180);
     private RoleExecutionConfig roleExecutionDefaults = new RoleExecutionConfig();
     private java.util.Map<String, RoleExecutionConfig> roleExecution = new java.util.HashMap<>();
-    private List<String> workerRoles = new ArrayList<>(
-            List.of("analysis", "research", "design", "engineering", "implementer", "qa", "writing", "general"));
     private String workspaceRoot;
     private AgentSkillsConfig skills = new AgentSkillsConfig();
     private AgentToolsConfig tools = new AgentToolsConfig();
+    private SkillPlanningConfig skillPlanning = new SkillPlanningConfig();
     private AiProvider aiProvider = AiProvider.GOOGLE;
     private OpenAIConfig openai = new OpenAIConfig();
     private GoogleConfig google = new GoogleConfig();
@@ -183,17 +182,6 @@ public class MultiAgentProperties {
         this.workerTimeout = workerTimeout;
     }
 
-    public List<String> getWorkerRoles() {
-        return workerRoles;
-    }
-
-    public void setWorkerRoles(List<String> workerRoles) {
-        if (workerRoles == null || workerRoles.isEmpty()) {
-            return;
-        }
-        this.workerRoles = new ArrayList<>(workerRoles);
-    }
-
     public String getWorkspaceRoot() {
         return workspaceRoot;
     }
@@ -217,5 +205,37 @@ public class MultiAgentProperties {
 
     public void setTools(AgentToolsConfig tools) {
         this.tools = tools != null ? tools : new AgentToolsConfig();
+    }
+
+    public SkillPlanningConfig getSkillPlanning() {
+        return skillPlanning;
+    }
+
+    public void setSkillPlanning(SkillPlanningConfig skillPlanning) {
+        this.skillPlanning = skillPlanning != null ? skillPlanning : new SkillPlanningConfig();
+    }
+
+    public static class SkillPlanningConfig {
+        private int defaultSkillBudget = 3;
+        private java.util.Map<String, Integer> roleBudgets = new java.util.HashMap<>();
+
+        public int getDefaultSkillBudget() {
+            return defaultSkillBudget;
+        }
+
+        public void setDefaultSkillBudget(int defaultSkillBudget) {
+            this.defaultSkillBudget = defaultSkillBudget;
+        }
+
+        public java.util.Map<String, Integer> getRoleBudgets() {
+            return roleBudgets;
+        }
+
+        public void setRoleBudgets(java.util.Map<String, Integer> roleBudgets) {
+            if (roleBudgets == null) {
+                return;
+            }
+            this.roleBudgets = new java.util.HashMap<>(roleBudgets);
+        }
     }
 }

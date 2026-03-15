@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.24.xsd">
+
+    <changeSet id="01-seed-tool-external-document-search" author="cursor">
+        <sql>
+            INSERT INTO tool(name, description) VALUES
+            ('external_document_search', 'Search stored external documents (including arXiv abstracts) from the database')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+    <changeSet id="02-seed-role-tools-external-document-search" author="cursor">
+        <sql>
+            INSERT INTO role_tool_policy(role_id, tool_id, policy)
+            SELECT r.id, t.id, 'ALLOW'
+            FROM agent_role r
+            JOIN tool t ON t.name = 'external_document_search'
+            WHERE r.phase = 'WORKER'
+              AND (r.is_default = TRUE OR r.code = 'research')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

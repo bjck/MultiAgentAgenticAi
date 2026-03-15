@@ -39,11 +39,14 @@ public class StatePersistenceServiceImpl implements StatePersistenceService {
     @Override
     public void logPrompt(OrchestrationSession session, String purpose, @Nullable String role,
                           @Nullable String systemPrompt, @Nullable String userTemplate,
-                          Map<String, String> params, @Nullable String fullResponse) {
+                          Map<String, String> params, @Nullable String fullResponse,
+                          @Nullable Integer inputTokens, @Nullable Integer outputTokens) {
         try {
-            persistenceService.logPrompt(session, purpose, role, systemPrompt, userTemplate, params, fullResponse);
+            persistenceService.logPrompt(session, purpose, role, systemPrompt, userTemplate, params, fullResponse,
+                    inputTokens, outputTokens);
         } catch (Exception ex) {
-            log.debug("Failed to log prompt {}: {}", purpose, ex.getMessage());
+            log.warn("Failed to persist prompt log. sessionId={}, purpose={}, role={}. LLM events will not appear for this run. Cause: {}",
+                    session != null ? session.getId() : null, purpose, role, ex.getMessage(), ex);
         }
     }
 
@@ -62,7 +65,8 @@ public class StatePersistenceServiceImpl implements StatePersistenceService {
         try {
             return persistenceService.logWorkerResult(session, taskLog, role, output);
         } catch (Exception ex) {
-            log.debug("Failed to log worker result: {}", ex.getMessage());
+            log.warn("Failed to persist worker result log. sessionId={}, role={}",
+                    session != null ? session.getId() : null, role, ex);
             return null;
         }
     }
@@ -73,7 +77,8 @@ public class StatePersistenceServiceImpl implements StatePersistenceService {
         try {
             return persistenceService.logToolCall(session, taskLog, role, toolName, toolInput, toolOutput);
         } catch (Exception ex) {
-            log.debug("Failed to log tool call {}: {}", toolName, ex.getMessage());
+            log.warn("Failed to persist tool call log. sessionId={}, role={}, tool={}",
+                    session != null ? session.getId() : null, role, toolName, ex);
             return null;
         }
     }

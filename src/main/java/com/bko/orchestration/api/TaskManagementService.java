@@ -21,24 +21,6 @@ import java.util.Map;
 public interface TaskManagementService {
 
     /**
-     * Selects roles for an orchestration session based on the user message and context.
-     *
-     * @param session The current orchestration session.
-     * @param userMessage The message from the user.
-     * @param requiresEdits Indicates if the role selection process requires edits.
-     * @param context Additional context for role selection.
-     * @param provider The AI model provider.
-     * @param model The AI model to use.
-     * @return A list of selected role names.
-     */
-    List<String> selectRoles(OrchestrationSession session,
-                             String userMessage,
-                             boolean requiresEdits,
-                             @Nullable String context,
-                             String provider,
-                             String model);
-
-    /**
      * Runs a discovery phase to gather information relevant to the user's request.
      *
      * @param session The current orchestration session.
@@ -60,7 +42,6 @@ public interface TaskManagementService {
      * @param session The current orchestration session.
      * @param userMessage The message from the user.
      * @param selectedRoles A list of roles participating in the analysis.
-     * @param requiresEdits Indicates if the analysis rounds require edits.
      * @param provider The AI model provider.
      * @param model The AI model to use.
      * @param baseContext The base context for the analysis.
@@ -70,7 +51,6 @@ public interface TaskManagementService {
     AdvisoryBundle runAnalysisRounds(OrchestrationSession session,
                                      String userMessage,
                                      List<String> selectedRoles,
-                                     boolean requiresEdits,
                                      String provider,
                                      String model,
                                      @Nullable String baseContext,
@@ -98,7 +78,6 @@ public interface TaskManagementService {
      *
      * @param session The current orchestration session.
      * @param userMessage The message from the user.
-     * @param requiresEdits Indicates if the plan requires edits.
      * @param allowedRoles A list of roles allowed in the plan.
      * @param context Additional context for the plan request.
      * @param provider The AI model provider.
@@ -109,7 +88,6 @@ public interface TaskManagementService {
      */
     OrchestratorPlan requestPlan(OrchestrationSession session,
                                  String userMessage,
-                                 boolean requiresEdits,
                                  List<String> allowedRoles,
                                  @Nullable String context,
                                  String provider,
@@ -122,7 +100,6 @@ public interface TaskManagementService {
      *
      * @param session The current orchestration session.
      * @param userMessage The message from the user.
-     * @param requiresEdits Indicates if the continuation plan requires edits.
      * @param allowedRoles A list of roles allowed in the plan.
      * @param context Additional context for the plan request.
      * @param errorSummary A summary of any errors encountered.
@@ -136,7 +113,6 @@ public interface TaskManagementService {
      */
     OrchestratorPlan requestContinuationPlan(OrchestrationSession session,
                                              String userMessage,
-                                             boolean requiresEdits,
                                              List<String> allowedRoles,
                                              @Nullable String context,
                                              @Nullable String errorSummary,
@@ -152,7 +128,6 @@ public interface TaskManagementService {
      *
      * @param plan The {@link OrchestratorPlan} to sanitize.
      * @param userMessage The message from the user.
-     * @param requiresEdits Indicates if the plan requires edits.
      * @param allowedRoles A list of roles allowed in the plan.
      * @param excludeAdvisory Flag to exclude advisory information.
      * @param allowEmpty Flag to allow an empty plan.
@@ -160,7 +135,6 @@ public interface TaskManagementService {
      */
     OrchestratorPlan sanitizePlan(OrchestratorPlan plan,
                                   String userMessage,
-                                  boolean requiresEdits,
                                   List<String> allowedRoles,
                                   boolean excludeAdvisory,
                                   boolean allowEmpty);
@@ -171,7 +145,6 @@ public interface TaskManagementService {
      * @param session The current orchestration session.
      * @param userMessage The message from the user.
      * @param tasks A list of {@link TaskSpec} to execute.
-     * @param requiresEdits Indicates if the task execution might require subsequent edits.
      * @param advisoryContext The advisory context for task execution.
      * @param priorResults A list of {@link WorkerResult} from prior tasks.
      * @param provider The AI model provider.
@@ -183,7 +156,6 @@ public interface TaskManagementService {
     List<WorkerResult> executePlanTasks(OrchestrationSession session,
                                         String userMessage,
                                         List<TaskSpec> tasks,
-                                        boolean requiresEdits,
                                         String advisoryContext,
                                         List<WorkerResult> priorResults,
                                         String provider,
@@ -197,7 +169,6 @@ public interface TaskManagementService {
      * @param session The current orchestration session.
      * @param userMessage The message from the user.
      * @param tasks A list of {@link TaskSpec} to execute.
-     * @param requiresEdits Indicates if the task execution might require subsequent edits.
      * @param provider The AI model provider.
      * @param model The AI model to use.
      * @param taskIndex A map to index tasks by their IDs.
@@ -207,7 +178,6 @@ public interface TaskManagementService {
     List<WorkerResult> executeApprovedPlanTasks(OrchestrationSession session,
                                                 String userMessage,
                                                 List<TaskSpec> tasks,
-                                                boolean requiresEdits,
                                                 String provider,
                                                 String model,
                                                 Map<String, TaskLog> taskIndex,

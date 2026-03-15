@@ -6,17 +6,20 @@ import com.bko.config.MultiAgentProperties;
 import com.bko.entity.OrchestrationSession;
 import com.bko.entity.OrchestratorPlanLog;
 import com.bko.entity.TaskLog;
+import com.bko.entity.AgentRole;
+import com.bko.entity.PhaseType;
 import com.bko.orchestration.api.AgentInvocationService;
 import com.bko.orchestration.api.EventProcessingService;
 import com.bko.orchestration.api.SkillExecutionService;
+import com.bko.orchestration.api.StatePersistenceService;
 import com.bko.orchestration.api.TaskManagementService;
 import com.bko.orchestration.model.AdvisoryBundle;
 import com.bko.orchestration.model.DiscoveryBundle;
 import com.bko.orchestration.model.FailureDetail;
 import com.bko.orchestration.model.OrchestratorPlan;
-import com.bko.orchestration.model.RoleSelection;
 import com.bko.orchestration.model.TaskSpec;
 import com.bko.orchestration.model.WorkerResult;
+import com.bko.repository.AgentRoleRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
@@ -38,48 +41,30 @@ import java.util.concurrent.TimeUnit;
 public class TaskManagementServiceImpl implements TaskManagementService {
 
     private final MultiAgentProperties properties;
-    private final FileEditDetectionService fileEditDetectionService;
     private final OrchestrationContextService orchestrationContextService;
     private final AgentInvocationService agentInvocationService;
     private final SkillExecutionService skillExecutionService;
     private final EventProcessingService eventProcessingService;
     private final OrchestrationMetricsService metricsService;
+    private final AgentRoleRepository agentRoleRepository;
+    private final StatePersistenceService statePersistenceService;
 
     public TaskManagementServiceImpl(MultiAgentProperties properties,
-                                     FileEditDetectionService fileEditDetectionService,
                                      OrchestrationContextService orchestrationContextService,
                                      AgentInvocationService agentInvocationService,
                                      SkillExecutionService skillExecutionService,
                                      EventProcessingService eventProcessingService,
-                                     OrchestrationMetricsService metricsService) {
+                                     OrchestrationMetricsService metricsService,
+                                     AgentRoleRepository agentRoleRepository,
+                                     StatePersistenceService statePersistenceService) {
         this.properties = properties;
-        this.fileEditDetectionService = fileEditDetectionService;
         this.orchestrationContextService = orchestrationContextService;
         this.agentInvocationService = agentInvocationService;
         this.skillExecutionService = skillExecutionService;
         this.eventProcessingService = eventProcessingService;
         this.metricsService = metricsService;
-    }
-
-    @Override
-    public List<String> selectRoles(OrchestrationSession session,
-                                    String userMessage,
-                                    boolean requiresEdits,
-                                    @Nullable String context,
-                                    String provider,
-                                    String model) {
-        List<String> availableRoles = normalizedRoles();
-        try {
-            RoleSelection selection = agentInvocationService.requestRoleSelection(session, userMessage, requiresEdits,
-                    availableRoles, context, provider, model);
-            List<String> roles = sanitizeSelectedRoles(selection != null ? selection.roles() : null, requiresEdits);
-            log.info("Selected roles: {}.", String.join(", ", roles));
-            return roles;
-        } catch (Exception ex) {
-            List<String> roles = sanitizeSelectedRoles(null, requiresEdits);
-            log.info("Selected roles (fallback): {}.", String.join(", ", roles));
-            return roles;
-        }
+        this.agentRoleRepository = agentRoleRepository;
+        this.statePersistenceService = statePersistenceService;
     }
 
     @Override
@@ -88,18 +73,13 @@ public class TaskManagementServiceImpl implements TaskManagementService {
                                         String provider,
                                         String model,
                                         @Nullable String streamId) {
-        TaskSpec discoveryTask = buildDiscoveryTask();
-        eventProcessingService.emitTaskStart(streamId, discoveryTask);
-        WorkerResult result = skillExecutionService.runWorker(session, userMessage, discoveryTask, false, null, provider, model,
-                false, true, null, streamId);
-        return new DiscoveryBundle(List.of(discoveryTask), List.of(result));
+        return new DiscoveryBundle(List.of(), List.of());
     }
 
     @Override
     public AdvisoryBundle runAnalysisRounds(OrchestrationSession session,
                                             String userMessage,
                                             List<String> selectedRoles,
-                                            boolean requiresEdits,
                                             String provider,
                                             String model,
                                             @Nullable String baseContext,
@@ -110,7 +90,7 @@ public class TaskManagementServiceImpl implements TaskManagementService {
         TaskSpec analysisTask = new TaskSpec(TASK_ID_ANALYSIS, ROLE_ANALYSIS,
                 ANALYSIS_TASK_DESCRIPTION, ANALYSIS_TASK_EXPECTED_OUTPUT.formatted(ANALYSIS_HANDOFF_SCHEMA));
         eventProcessingService.emitTaskStart(streamId, analysisTask);
-        WorkerResult result = skillExecutionService.runCollaborativeTask(session, userMessage, analysisTask, requiresEdits,
+        WorkerResult result = skillExecutionService.runCollaborativeTask(session, userMessage, analysisTask,
                 baseContext, provider, model, null, streamId);
         return new AdvisoryBundle(List.of(analysisTask), List.of(result));
     }
@@ -126,31 +106,26 @@ public class TaskManagementServiceImpl implements TaskManagementService {
 
     @Override
     public TaskSpec buildContextSyncTask(List<String> selectedRoles) {
-        String role = (selectedRoles != null && selectedRoles.contains(ROLE_ANALYSIS))
-                ? ROLE_ANALYSIS
-                : ROLE_GENERAL;
-        return new TaskSpec(TASK_ID_CONTEXT, role, CONTEXT_SYNC_TASK_DESCRIPTION, CONTEXT_SYNC_TASK_EXPECTED_OUTPUT);
+        return null;
     }
 
     @Override
     public OrchestratorPlan requestPlan(OrchestrationSession session,
                                         String userMessage,
-                                        boolean requiresEdits,
                                         List<String> allowedRoles,
                                         @Nullable String context,
                                         String provider,
                                         String model,
                                         boolean excludeAdvisory,
                                         boolean allowEmpty) {
-        OrchestratorPlan plan = agentInvocationService.requestPlan(session, userMessage, requiresEdits,
+        OrchestratorPlan plan = agentInvocationService.requestPlan(session, userMessage,
                 allowedRoles, context, provider, model);
-        return sanitizePlan(plan, userMessage, requiresEdits, allowedRoles, excludeAdvisory, allowEmpty);
+        return sanitizePlan(plan, userMessage, allowedRoles, excludeAdvisory, allowEmpty);
     }
 
     @Override
     public OrchestratorPlan requestContinuationPlan(OrchestrationSession session,
                                                     String userMessage,
-                                                    boolean requiresEdits,
                                                     List<String> allowedRoles,
                                                     @Nullable String context,
                                                     @Nullable String errorSummary,
@@ -160,21 +135,20 @@ public class TaskManagementServiceImpl implements TaskManagementService {
                                                     String model,
                                                     boolean excludeAdvisory,
                                                     boolean allowEmpty) {
-        OrchestratorPlan continuation = agentInvocationService.requestContinuationPlan(session, userMessage, requiresEdits,
+        OrchestratorPlan continuation = agentInvocationService.requestContinuationPlan(session, userMessage,
                 allowedRoles, context, errorSummary, plan, results, provider, model);
-        return sanitizePlan(continuation, userMessage, requiresEdits, allowedRoles, excludeAdvisory, allowEmpty);
+        return sanitizePlan(continuation, userMessage, allowedRoles, excludeAdvisory, allowEmpty);
     }
 
     @Override
     public OrchestratorPlan sanitizePlan(OrchestratorPlan plan,
                                          String userMessage,
-                                         boolean requiresEdits,
                                          List<String> allowedRoles,
                                          boolean excludeAdvisory,
                                          boolean allowEmpty) {
         if (plan == null || plan.tasks() == null) {
             return allowEmpty ? new OrchestratorPlan(userMessage, List.of())
-                    : defaultPlan(userMessage, requiresEdits, allowedRoles);
+                    : defaultPlan(userMessage, allowedRoles);
         }
         String objective = StringUtils.hasText(plan.objective()) ? plan.objective() : userMessage;
         List<TaskSpec> incomingTasks = plan.tasks();
@@ -184,10 +158,8 @@ public class TaskManagementServiceImpl implements TaskManagementService {
         Set<String> seenSignatures = new LinkedHashSet<>();
         for (int index = 0; index < maxTasks; index++) {
             TaskSpec task = incomingTasks.get(index);
-            String role = normalizeRole(task.role(), normalizedRoles);
-            if (excludeAdvisory && ADVISORY_ROLES.contains(role)) {
-                continue;
-            }
+            // Force all tasks to use the single canonical worker role.
+            String role = ROLE_GENERAL;
             String id = StringUtils.hasText(task.id()) ? task.id() : TASK_PREFIX + (index + 1);
             if (TASK_ID_CONTEXT.equalsIgnoreCase(id) || TASK_ID_DISCOVERY.equalsIgnoreCase(id)) {
                 continue;
@@ -196,10 +168,6 @@ public class TaskManagementServiceImpl implements TaskManagementService {
             String expectedOutput = StringUtils.hasText(task.expectedOutput())
                     ? task.expectedOutput()
                     : DEFAULT_EXPECTED_OUTPUT;
-            if (requiresEdits) {
-                boolean canEdit = ROLE_IMPLEMENTER.equals(role);
-                expectedOutput = fileEditDetectionService.appendFileEditInstruction(expectedOutput, canEdit);
-            }
             TaskSpec normalizedTask = new TaskSpec(id, role, description, expectedOutput);
             String signature = normalizeTaskSignature(role, description);
             if (seenSignatures.contains(signature)) {
@@ -208,13 +176,13 @@ public class TaskManagementServiceImpl implements TaskManagementService {
             seenSignatures.add(signature);
             sanitized.add(normalizedTask);
         }
-        if (requiresEdits && sanitized.stream().noneMatch(task -> ROLE_IMPLEMENTER.equals(task.role()))) {
-            sanitized.add(new TaskSpec(TASK_ID_IMPLEMENTATION, ROLE_IMPLEMENTER, userMessage,
-                    fileEditDetectionService.appendFileEditInstruction(DEFAULT_IMPLEMENTATION_INSTRUCTION, true)));
-        }
         if (sanitized.isEmpty()) {
             return allowEmpty ? new OrchestratorPlan(objective, List.of())
-                    : defaultPlan(userMessage, requiresEdits, allowedRoles);
+                    : defaultPlan(userMessage, allowedRoles);
+        }
+        if (sanitized.size() > 1) {
+            TaskSpec collapsed = collapsePlanToSingleTask(sanitized);
+            return new OrchestratorPlan(objective, List.of(collapsed));
         }
         return new OrchestratorPlan(objective, sanitized);
     }
@@ -223,7 +191,6 @@ public class TaskManagementServiceImpl implements TaskManagementService {
     public List<WorkerResult> executePlanTasks(OrchestrationSession session,
                                                String userMessage,
                                                List<TaskSpec> tasks,
-                                               boolean requiresEdits,
                                                String advisoryContext,
                                                List<WorkerResult> priorResults,
                                                String provider,
@@ -236,123 +203,30 @@ public class TaskManagementServiceImpl implements TaskManagementService {
         if (eventProcessingService.isCancelled(streamId)) {
             return List.of();
         }
-        boolean contextAlreadyRun = priorResults != null && priorResults.stream()
-                .anyMatch(result -> TASK_ID_CONTEXT.equalsIgnoreCase(result.taskId()));
-        List<TaskSpec> effectiveTasks = contextAlreadyRun
-                ? tasks.stream().filter(task -> !TASK_ID_CONTEXT.equalsIgnoreCase(task.id())).toList()
-                : tasks;
+        List<TaskSpec> effectiveTasks = tasks.stream()
+                .filter(task -> !TASK_ID_CONTEXT.equalsIgnoreCase(task.id()))
+                .filter(task -> !TASK_ID_DISCOVERY.equalsIgnoreCase(task.id()))
+                .toList();
         if (effectiveTasks.isEmpty()) {
             return List.of();
         }
         metricsService.recordTasksExecuted(effectiveTasks.size());
         Duration timeout = properties.getWorkerTimeout();
-        if (requiresEdits) {
-            List<TaskSpec> engineeringTasks = effectiveTasks.stream()
-                    .filter(task -> ROLE_ENGINEERING.equals(task.role()))
-                    .toList();
-            List<TaskSpec> implementerTasks = effectiveTasks.stream()
-                    .filter(task -> ROLE_IMPLEMENTER.equals(task.role()))
-                    .toList();
-            List<TaskSpec> otherTasks = effectiveTasks.stream()
-                    .filter(task -> !ROLE_ENGINEERING.equals(task.role()) && !ROLE_IMPLEMENTER.equals(task.role()))
-                    .toList();
-            List<WorkerResult> results = new ArrayList<>(effectiveTasks.size());
-            String sharedContext = orchestrationContextService.buildResultsContext(priorResults);
-            String engineeringContext = orchestrationContextService.buildResultsContext(
-                    orchestrationContextService.filterResultsByRole(priorResults, Set.of(ROLE_ENGINEERING)));
-            for (TaskSpec task : engineeringTasks) {
-                if (eventProcessingService.isCancelled(streamId)) {
-                    return results;
-                }
-                String taskContext = engineeringContext;
-                TaskLog taskLog = taskIndex.get(task.id());
-                eventProcessingService.emitTaskStart(streamId, task);
-                WorkerResult result = CompletableFuture
-                        .supplyAsync(() -> skillExecutionService.runCollaborativeTask(session, userMessage, task, true, taskContext, provider, model, taskLog, streamId))
-                        .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                        .exceptionally(ex -> {
-                            WorkerResult failed = new WorkerResult(task.id(), task.role(),
-                                    WORKER_FAILED_MESSAGE + ex.getMessage());
-                            eventProcessingService.emitTaskOutput(streamId, failed);
-                            eventProcessingService.emitTaskComplete(streamId, failed);
-                            return failed;
-                        })
-                        .join();
-                results.add(result);
-                engineeringContext = orchestrationContextService.mergeContexts(engineeringContext,
-                        orchestrationContextService.buildResultsContext(List.of(result)));
-            }
-            if (!otherTasks.isEmpty()) {
-                if (eventProcessingService.isCancelled(streamId)) {
-                    return results;
-                }
-                String discussionContext = orchestrationContextService.mergeContexts(sharedContext,
-                        orchestrationContextService.buildResultsContext(results));
-                List<CompletableFuture<WorkerResult>> futures = otherTasks.stream()
-                        .map(task -> {
-                            TaskLog tl = taskIndex.get(task.id());
-                            eventProcessingService.emitTaskStart(streamId, task);
-                            return CompletableFuture.supplyAsync(() -> skillExecutionService.runCollaborativeTask(session, userMessage, task, true,
-                                            discussionContext, provider, model, tl, streamId))
-                                    .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                                    .exceptionally(ex -> {
-                                        WorkerResult failed = new WorkerResult(task.id(), task.role(),
-                                                WORKER_FAILED_MESSAGE + ex.getMessage());
-                                        eventProcessingService.emitTaskOutput(streamId, failed);
-                                        eventProcessingService.emitTaskComplete(streamId, failed);
-                                        return failed;
-                                    });
-                        })
-                        .toList();
-                if (eventProcessingService.isCancelled(streamId)) {
-                    futures.forEach(future -> future.cancel(true));
-                    return results;
-                }
-                results.addAll(futures.stream().map(CompletableFuture::join).toList());
-            }
-            if (implementerTasks.isEmpty()) {
-                return results;
-            }
-            String implementationContext = orchestrationContextService.mergeContexts(sharedContext,
-                    orchestrationContextService.buildResultsContext(results));
-            for (TaskSpec task : implementerTasks) {
-                if (eventProcessingService.isCancelled(streamId)) {
-                    return results;
-                }
-                String taskContext = implementationContext;
-                TaskLog taskLog = taskIndex.get(task.id());
-                eventProcessingService.emitTaskStart(streamId, task);
-                WorkerResult result = CompletableFuture
-                        .supplyAsync(() -> skillExecutionService.runCollaborativeTask(session, userMessage, task, true, taskContext, provider, model, taskLog, streamId))
-                        .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                        .exceptionally(ex -> {
-                            WorkerResult failed = new WorkerResult(task.id(), task.role(),
-                                    WORKER_FAILED_MESSAGE + ex.getMessage());
-                            eventProcessingService.emitTaskOutput(streamId, failed);
-                            eventProcessingService.emitTaskComplete(streamId, failed);
-                            return failed;
-                        })
-                        .join();
-                results.add(result);
-                implementationContext = orchestrationContextService.mergeContexts(implementationContext,
-                        orchestrationContextService.buildResultsContext(List.of(result)));
-            }
-            return results;
-        }
-
         String context = orchestrationContextService.buildResultsContext(priorResults);
         List<CompletableFuture<WorkerResult>> futures = effectiveTasks.stream()
                 .map(task -> {
                     TaskLog tl = taskIndex.get(task.id());
                     eventProcessingService.emitTaskStart(streamId, task);
-                    return CompletableFuture.supplyAsync(() -> skillExecutionService.runCollaborativeTask(session, userMessage, task, false,
-                                    context, provider, model, tl, streamId))
+                    return CompletableFuture.supplyAsync(
+                                    () -> skillExecutionService.runWorker(session, userMessage, task,
+                                            context, provider, model, false, false, tl, streamId))
                             .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
                             .exceptionally(ex -> {
                                 WorkerResult failed = new WorkerResult(task.id(), task.role(),
                                         WORKER_FAILED_MESSAGE + ex.getMessage());
                                 eventProcessingService.emitTaskOutput(streamId, failed);
                                 eventProcessingService.emitTaskComplete(streamId, failed);
+                                logFailedWorkerPrompt(session, userMessage, context, task, ex);
                                 return failed;
                             });
                 })
@@ -370,7 +244,6 @@ public class TaskManagementServiceImpl implements TaskManagementService {
     public List<WorkerResult> executeApprovedPlanTasks(OrchestrationSession session,
                                                        String userMessage,
                                                        List<TaskSpec> tasks,
-                                                       boolean requiresEdits,
                                                        String provider,
                                                        String model,
                                                        Map<String, TaskLog> taskIndex,
@@ -390,75 +263,53 @@ public class TaskManagementServiceImpl implements TaskManagementService {
         }
         metricsService.recordApprovedTasksExecuted(effectiveTasks.size());
         Duration timeout = properties.getWorkerTimeout();
-
-        List<TaskSpec> implementerTasks = effectiveTasks.stream()
-                .filter(task -> ROLE_IMPLEMENTER.equals(task.role()))
+        String context = null;
+        List<CompletableFuture<WorkerResult>> futures = effectiveTasks.stream()
+                .map(task -> {
+                    TaskLog tl = taskIndex.get(task.id());
+                    eventProcessingService.emitTaskStart(streamId, task);
+                    return CompletableFuture.supplyAsync(
+                                    () -> skillExecutionService.runWorker(session, userMessage, task,
+                                            context, provider, model, false, false, tl, streamId))
+                            .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
+                            .exceptionally(ex -> {
+                                WorkerResult failed = new WorkerResult(task.id(), task.role(),
+                                        WORKER_FAILED_MESSAGE + ex.getMessage());
+                                eventProcessingService.emitTaskOutput(streamId, failed);
+                                eventProcessingService.emitTaskComplete(streamId, failed);
+                                logFailedWorkerPrompt(session, userMessage, context, task, ex);
+                                return failed;
+                            });
+                })
                 .toList();
-        List<TaskSpec> advisoryTasks = effectiveTasks.stream()
-                .filter(task -> !ROLE_IMPLEMENTER.equals(task.role()))
+        if (eventProcessingService.isCancelled(streamId)) {
+            futures.forEach(future -> future.cancel(true));
+            return List.of();
+        }
+        return futures.stream()
+                .map(CompletableFuture::join)
                 .toList();
+    }
 
-        List<WorkerResult> results = new ArrayList<>(effectiveTasks.size());
-        if (!advisoryTasks.isEmpty()) {
-            if (eventProcessingService.isCancelled(streamId)) {
-                return results;
-            }
-            List<CompletableFuture<WorkerResult>> futures = advisoryTasks.stream()
-                    .map(task -> {
-                        TaskLog tl = taskIndex.get(task.id());
-                        boolean taskRequiresEdits = false;
-                        eventProcessingService.emitTaskStart(streamId, task);
-                        return CompletableFuture.supplyAsync(
-                                        () -> skillExecutionService.runWorker(session, userMessage, task, taskRequiresEdits, null, provider, model,
-                                                false, false, tl, streamId))
-                                .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                                .exceptionally(ex -> {
-                                    WorkerResult failed = new WorkerResult(task.id(), task.role(),
-                                            WORKER_FAILED_MESSAGE + ex.getMessage());
-                                    eventProcessingService.emitTaskOutput(streamId, failed);
-                                    eventProcessingService.emitTaskComplete(streamId, failed);
-                                    return failed;
-                                });
-                    })
-                    .toList();
-            if (eventProcessingService.isCancelled(streamId)) {
-                futures.forEach(future -> future.cancel(true));
-                return results;
-            }
-            results.addAll(futures.stream().map(CompletableFuture::join).toList());
+    /**
+     * Persist a prompt log entry when a worker fails (e.g. timeout) so the LLM event
+     * still appears in the run detail UI; otherwise only the plan event would show.
+     */
+    private void logFailedWorkerPrompt(OrchestrationSession session, String userMessage,
+                                       @Nullable String context, TaskSpec task, Throwable ex) {
+        try {
+            Map<String, String> params = new HashMap<>();
+            params.put("input", userMessage != null ? userMessage : "");
+            params.put("context", context != null ? context : "");
+            params.put("task", task != null ? task.description() : "");
+            params.put("expectedOutput", task != null && task.expectedOutput() != null ? task.expectedOutput() : "");
+            String output = WORKER_FAILED_MESSAGE + (ex != null && ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+            statePersistenceService.logPrompt(session, PURPOSE_WORKER_TASK, task != null ? task.role() : null,
+                    null, null, params, output, null, null);
+        } catch (Exception e) {
+            log.warn("Failed to persist prompt log for failed worker. sessionId={}, taskId={}",
+                    session != null ? session.getId() : null, task != null ? task.id() : null, e);
         }
-
-        if (!implementerTasks.isEmpty()) {
-            if (eventProcessingService.isCancelled(streamId)) {
-                return results;
-            }
-            String implementationContext = orchestrationContextService.buildResultsContext(results);
-            for (TaskSpec task : implementerTasks) {
-                if (eventProcessingService.isCancelled(streamId)) {
-                    return results;
-                }
-                TaskLog taskLog = taskIndex.get(task.id());
-                String taskContext = implementationContext;
-                boolean taskRequiresEdits = requiresEdits;
-                eventProcessingService.emitTaskStart(streamId, task);
-                WorkerResult result = CompletableFuture
-                        .supplyAsync(() -> skillExecutionService.runWorker(session, userMessage, task, taskRequiresEdits, taskContext, provider, model,
-                                false, false, taskLog, streamId))
-                        .orTimeout(timeout.toSeconds(), TimeUnit.SECONDS)
-                        .exceptionally(ex -> {
-                            WorkerResult failed = new WorkerResult(task.id(), task.role(),
-                                    WORKER_FAILED_MESSAGE + ex.getMessage());
-                            eventProcessingService.emitTaskOutput(streamId, failed);
-                            eventProcessingService.emitTaskComplete(streamId, failed);
-                            return failed;
-                        })
-                        .join();
-                results.add(result);
-                implementationContext = orchestrationContextService.mergeContexts(implementationContext,
-                        orchestrationContextService.buildResultsContext(List.of(result)));
-            }
-        }
-        return results;
     }
 
     @Override
@@ -565,19 +416,36 @@ public class TaskManagementServiceImpl implements TaskManagementService {
         return normalizedRole + "::" + normalizedDescription;
     }
 
-    private OrchestratorPlan defaultPlan(String userMessage, boolean requiresEdits, List<String> allowedRoles) {
+    private OrchestratorPlan defaultPlan(String userMessage, List<String> allowedRoles) {
         List<String> normalizedRoles = normalizeAllowedRoles(allowedRoles);
-        String role = requiresEdits
-                ? (normalizedRoles.contains(ROLE_IMPLEMENTER)
-                        ? ROLE_IMPLEMENTER
-                        : (normalizedRoles.contains(ROLE_ENGINEERING) ? ROLE_ENGINEERING : fallbackRole(normalizedRoles)))
-                : fallbackRole(normalizedRoles);
+        String role = fallbackRole(normalizedRoles);
         String expectedOutput = DEFAULT_COMPLETE_RESPONSE_INSTRUCTION;
-        if (requiresEdits) {
-            expectedOutput = fileEditDetectionService.appendFileEditInstruction(expectedOutput, ROLE_IMPLEMENTER.equals(role));
-        }
         TaskSpec fallback = new TaskSpec(TASK_ID_FALLBACK, role, userMessage, expectedOutput);
         return new OrchestratorPlan(userMessage, List.of(fallback));
+    }
+
+    private TaskSpec collapsePlanToSingleTask(List<TaskSpec> tasks) {
+        StringBuilder sb = new StringBuilder("Plan steps:\n");
+        int step = 1;
+        for (TaskSpec task : tasks) {
+            if (task == null) {
+                continue;
+            }
+            String description = StringUtils.hasText(task.description()) ? task.description().trim() : "";
+            if (!description.isEmpty()) {
+                sb.append(step).append(". ").append(description);
+                if (!description.endsWith(".")) {
+                    sb.append(".");
+                }
+                sb.append("\n");
+                step++;
+            }
+        }
+        String planText = sb.toString().trim();
+        if (!StringUtils.hasText(planText) || planText.equals("Plan steps:")) {
+            planText = "Execute the user request with a clear, sequential plan.";
+        }
+        return new TaskSpec(TASK_ID_FALLBACK, ROLE_GENERAL, planText, DEFAULT_COMPLETE_RESPONSE_INSTRUCTION);
     }
 
     private String normalizeRole(String role, List<String> allowedRoles) {
@@ -589,7 +457,9 @@ public class TaskManagementServiceImpl implements TaskManagementService {
     }
 
     private List<String> normalizedRoles() {
-        return properties.getWorkerRoles().stream()
+        List<AgentRole> roles = agentRoleRepository.findByPhaseAndActiveTrueOrderByCodeAsc(PhaseType.WORKER);
+        return roles.stream()
+                .map(AgentRole::getCode)
                 .filter(StringUtils::hasText)
                 .map(role -> role.trim().toLowerCase(Locale.ROOT))
                 .distinct()
@@ -606,40 +476,6 @@ public class TaskManagementServiceImpl implements TaskManagementService {
             return normalizedRoles();
         }
         return normalized;
-    }
-
-    private List<String> sanitizeSelectedRoles(List<String> selected, boolean requiresEdits) {
-        List<String> available = normalizedRoles();
-        LinkedHashSet<String> roles = new LinkedHashSet<>();
-        if (selected != null) {
-            for (String role : selected) {
-                if (!StringUtils.hasText(role)) {
-                    continue;
-                }
-                String normalized = role.trim().toLowerCase(Locale.ROOT);
-                if (available.contains(normalized)) {
-                    roles.add(normalized);
-                }
-            }
-        }
-        if (roles.isEmpty()) {
-            roles.addAll(available);
-        }
-        if (requiresEdits) {
-            if (!roles.contains(ROLE_ENGINEERING) && available.contains(ROLE_ENGINEERING)) {
-                roles.add(ROLE_ENGINEERING);
-            }
-            if (!roles.contains(ROLE_IMPLEMENTER)) {
-                if (available.contains(ROLE_IMPLEMENTER)) {
-                    roles.add(ROLE_IMPLEMENTER);
-                } else if (available.contains(ROLE_ENGINEERING)) {
-                    roles.add(ROLE_ENGINEERING);
-                } else {
-                    roles.add(fallbackRole(available));
-                }
-            }
-        }
-        return new ArrayList<>(roles);
     }
 
     private String fallbackRole(List<String> allowedRoles) {

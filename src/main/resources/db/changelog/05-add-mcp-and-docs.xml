@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.24.xsd">
+
+    <changeSet id="05-create-mcp-server" author="codex">
+        <createTable tableName="mcp_server">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="transport" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="endpoint_url" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="headers_json" type="TEXT"/>
+            <column name="enabled" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS ux_mcp_server_name ON mcp_server (lower(name));</sql>
+    </changeSet>
+
+    <changeSet id="06-create-external-document" author="codex">
+        <createTable tableName="external_document">
+            <column name="id" type="UUID" defaultValueComputed="gen_random_uuid()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="source" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_id" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="title" type="TEXT"/>
+            <column name="abstract_text" type="TEXT"/>
+            <column name="url" type="TEXT"/>
+            <column name="authors" type="TEXT"/>
+            <column name="categories" type="TEXT"/>
+            <column name="source_published_at" type="TIMESTAMPTZ"/>
+            <column name="source_updated_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="external_document" columnNames="source, source_id"
+                             constraintName="uk_external_document_source"/>
+        <createIndex tableName="external_document" indexName="ix_external_document_source">
+            <column name="source"/>
+        </createIndex>
+        <createIndex tableName="external_document" indexName="ix_external_document_published">
+            <column name="source_published_at"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="07-seed-tools-web" author="codex">
+        <sql>
+            INSERT INTO tool(name, description) VALUES
+            ('http_fetch','Fetch HTTP(S) content with size and timeout limits'),
+            ('arxiv_api_reader','Query the arXiv API and store abstracts as documentation')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+    <changeSet id="08-seed-skill-arxiv" author="codex">
+        <sql>
+            INSERT INTO skill(name, description, instructions) VALUES
+            ('ArXiv API Reader',
+             'Fetches metadata from the arXiv API and stores abstracts only.',
+             'Use the arxiv_api_reader tool to query arXiv. Do not download PDFs. Store abstracts only.')
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+    <changeSet id="09-seed-role-skill-arxiv" author="codex">
+        <sql>
+            INSERT INTO role_skill(role_id, skill_id, sort_order, enabled)
+            SELECT r.id, s.id, 0, TRUE
+            FROM agent_role r JOIN skill s ON lower(s.name) = 'arxiv api reader'
+            WHERE r.phase = 'WORKER' AND r.code = 'research'
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+    <changeSet id="10-seed-role-tools-arxiv" author="codex">
+        <sql>
+            INSERT INTO role_tool_policy(role_id, tool_id, policy)
+            SELECT r.id, t.id, 'ALLOW'
+            FROM agent_role r JOIN tool t ON t.name IN ('http_fetch','arxiv_api_reader')
+            WHERE r.phase = 'WORKER' AND r.code = 'research'
+            ON CONFLICT DO NOTHING;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

@@ -3,6 +3,7 @@ package com.bko.api;
 import com.bko.orchestration.OrchestratorService;
 import com.bko.stream.OrchestrationStreamService;
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +17,7 @@ import java.util.concurrent.ExecutorService;
 
 @RestController
 @RequestMapping("/api/chat")
+@Slf4j
 public class ChatController {
 
     private final OrchestratorService orchestratorService;
@@ -56,6 +58,7 @@ public class ChatController {
             try {
                 orchestratorService.planStreaming(request.message(), request.provider(), request.model(), runId);
             } catch (Exception ex) {
+                log.error("Streaming plan execution failed. runId={}", runId, ex);
                 streamService.emitError(runId, ex.getMessage());
                 streamService.emitRunComplete(runId, "FAILED");
             }
@@ -72,6 +75,7 @@ public class ChatController {
                 orchestratorService.executePlanStreaming(request.planId(), request.feedback(),
                         request.provider(), request.model(), runId);
             } catch (Exception ex) {
+                log.error("Streaming approved-plan execution failed. runId={}, planId={}", runId, request.planId(), ex);
                 streamService.emitError(runId, ex.getMessage());
                 streamService.emitRunComplete(runId, "FAILED");
             }
