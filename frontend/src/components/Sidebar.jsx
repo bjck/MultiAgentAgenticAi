@@ -3,11 +3,12 @@ import '../styles/Sidebar.css';
 import ModelSelector from './ModelSelector';
 import FileBrowser from './FileBrowser';
 import FileEditor from './FileEditor';
-import SkillManager from './SkillManager';
 import RoleSettings from './RoleSettings';
+import ToolSettings from './ToolSettings';
+import McpServerSettings from './McpServerSettings';
 
 const Sidebar = () => {
-  const [activeTab, setActiveTab] = useState('chat');
+  const [activeTab, setActiveTab] = useState('agents');
   const [editingFilePath, setEditingFilePath] = useState(null);
 
   const handleFileSelect = (filePath) => {
@@ -26,14 +27,11 @@ const Sidebar = () => {
     <aside className="sidebar">
       <nav className="sidebar-nav">
         <ul>
-          <li className={activeTab === 'chat' ? 'active' : ''}>
-            <button onClick={() => { setActiveTab('chat'); setEditingFilePath(null); }}>Chat</button>
+          <li className={activeTab === 'agents' ? 'active' : ''}>
+            <button onClick={() => { setActiveTab('agents'); setEditingFilePath(null); }}>Agents</button>
           </li>
           <li className={activeTab === 'files' ? 'active' : ''}>
             <button onClick={() => setActiveTab('files')}>Files</button>
-          </li>
-          <li className={activeTab === 'skills' ? 'active' : ''}>
-            <button onClick={() => { setActiveTab('skills'); setEditingFilePath(null); }}>Skills</button>
           </li>
           <li className={activeTab === 'settings' ? 'active' : ''}>
             <button onClick={() => { setActiveTab('settings'); setEditingFilePath(null); }}>Settings</button>
@@ -44,10 +42,10 @@ const Sidebar = () => {
       <ModelSelector />
 
       <div className="sidebar-content">
-        {activeTab === 'chat' && (
+        {activeTab === 'agents' && (
           <div className="sidebar-section">
-            <h3>Chat Options</h3>
-            <p>Chat specific settings or information will go here.</p>
+            <h3>Agents</h3>
+            <p>Create and monitor self-running agents.</p>
           </div>
         )}
         {activeTab === 'files' && (
@@ -64,16 +62,12 @@ const Sidebar = () => {
             )}
           </div>
         )}
-        {activeTab === 'skills' && (
-          <div className="sidebar-section skill-management-section">
-            <h3>Skill Management</h3>
-            <SkillManager />
-          </div>
-        )}
         {activeTab === 'settings' && (
           <div className="sidebar-section">
             <h3>Settings</h3>
             <RoleSettings />
+            <ToolSettings />
+            <McpServerSettings />
           </div>
         )}
       </div>

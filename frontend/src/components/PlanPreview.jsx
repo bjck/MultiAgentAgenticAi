@@ -33,7 +33,40 @@ const buildFindingsMarkdown = (findings) => {
     .join('\n\n');
 };
 
-const PlanPreview = ({ plan, onExecute, onRevise, isAgentWorking }) => {
+const renderSkillPlans = (skillPlans = []) => {
+  if (!Array.isArray(skillPlans) || skillPlans.length === 0) {
+    return <p className="plan-muted">No skill plans available.</p>;
+  }
+
+  return (
+    <div className="plan-skill-list">
+      {skillPlans.map((plan) => (
+        <details className="plan-skill-item" key={`${plan.taskId}-${plan.role}`}>
+          <summary>
+            <span className="plan-skill-task">{plan.taskId || 'task'}</span>
+            <span className="plan-skill-role">{plan.role || 'role'}</span>
+            <span className="plan-skill-count">
+              {Array.isArray(plan.skills) ? plan.skills.length : 0}/{plan.budget ?? 0} skills
+            </span>
+          </summary>
+          <div className="plan-skill-body">
+            {plan.rationale && <p className="plan-skill-rationale">{plan.rationale}</p>}
+            <div className="plan-skill-chips">
+              {(plan.skills || []).map((skill) => (
+                <div className="plan-skill-chip" key={`${plan.taskId}-${skill.name}`}>
+                  <span>{skill.name}</span>
+                  {skill.description && <small>{skill.description}</small>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+};
+
+const PlanPreview = ({ plan, onExecute, onRevise, onRunDirect, isAgentWorking }) => {
   const [feedback, setFeedback] = useState('');
   if (!plan) {
     return null;
@@ -53,6 +86,10 @@ const PlanPreview = ({ plan, onExecute, onRevise, isAgentWorking }) => {
         <div className="plan-section">
           <ReactMarkdown>{buildTaskMarkdown(plan)}</ReactMarkdown>
         </div>
+        <div className="plan-section">
+          <h4>Skill Plans</h4>
+          {renderSkillPlans(plan.skillPlans)}
+        </div>
       </div>
       <div className="plan-actions">
         <textarea
@@ -63,6 +100,14 @@ const PlanPreview = ({ plan, onExecute, onRevise, isAgentWorking }) => {
           className="plan-feedback-input"
         />
         <div className="plan-action-buttons">
+          <button
+            type="button"
+            className="plan-skip-button"
+            onClick={() => onRunDirect?.()}
+            disabled={isAgentWorking}
+          >
+            Run directly (skip plan)
+          </button>
           <button
             type="button"
             className="plan-revise-button"

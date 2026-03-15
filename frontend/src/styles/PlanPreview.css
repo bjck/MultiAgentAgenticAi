@@ -51,6 +51,93 @@
   color: var(--plan-text-color);
 }
 
+.plan-muted {
+  margin: 0;
+  color: var(--text-color-light);
+}
+
+.plan-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-skill-item {
+  border: 1px solid var(--plan-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.plan-skill-item summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.plan-skill-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-skill-task {
+  font-weight: 700;
+  color: var(--plan-text-color);
+}
+
+.plan-skill-role {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-color-light);
+}
+
+.plan-skill-count {
+  margin-left: auto;
+  font-size: 0.85em;
+  color: var(--plan-text-color);
+  background: rgba(255, 255, 255, 0.5);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+
+.plan-skill-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-skill-rationale {
+  margin: 0;
+  color: var(--text-color);
+}
+
+.plan-skill-chips {
+  display: grid;
+  gap: 8px;
+}
+
+.plan-skill-chip {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px dashed var(--plan-border);
+}
+
+.plan-skill-chip span {
+  display: block;
+  font-weight: 600;
+  color: var(--plan-text-color);
+}
+
+.plan-skill-chip small {
+  display: block;
+  color: var(--text-color-light);
+  margin-top: 4px;
+}
+
 .plan-content p {
   margin-bottom: 0.5em;
 }

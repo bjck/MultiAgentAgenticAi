@@ -1,3 +1,41 @@
+## Overview
+
+This `frontend` module is a **Vite React** SPA that provides the UI for the MultiAgent system. It is built as a separate Maven module and bundled into the backend Spring Boot JAR.
+
+## Contents
+
+- `index.html`: HTML entry point used by Vite and the final build.
+- `src/`: React application source (components, contexts, styles).
+- `public/`: Static assets copied as-is into the Vite build.
+- `.mvn/`, `pom.xml`: Maven configuration for this frontend module.
+- `package.json`, `package-lock.json`: NPM dependencies and lockfile.
+- `target/`: Build output for this module.
+
+## Build & Run
+
+- **Frontend dev server (recommended during UI development)**:
+  - `cd frontend`
+  - `npm install`
+  - `npm run dev`
+  - Dev server proxies `/api` and `/ws` to `localhost:8080`.
+- **Production build via Maven**:
+  - `mvn -pl frontend clean package`
+  - Frontend assets are then packaged and served by the backend.
+
+## E2E tests (Playwright)
+
+- **Run e2e tests**: From `frontend`, run `npm run test:e2e`. Playwright starts the Vite dev server automatically.
+- **Full coverage**: For agent create/run and WebSocket updates, start the backend on port 8080 first (e.g. `mvn -pl backend spring-boot:run` from repo root). Without the backend, app-shell and tab tests still pass; agent and run tests may fail on API errors.
+- **UI mode**: `npm run test:e2e:ui` for interactive debugging.
+- Tests live in `frontend/e2e/` (e.g. `app.spec.js`, `agents.spec.js`, `arxiv.spec.js`, `agent-detail.spec.js`).
+
+## Agent Notes
+
+- **Do NOT scan or touch `node_modules/`**; it is generated and managed by NPM.
+- UI logic lives in `frontend/src` (see that folder’s `AGENTS.md` for details).
+- Keep imports relative and consistent with Vite’s default module resolution.
+- For styling, prefer editing files under `frontend/src/styles` rather than inlining large style blocks into components.
+
 # Frontend/src Directory Documentation
 This document provides an overview of the files and directories within frontend/src, detailing their general purpose and logic. It is designed to serve as a comprehensive reference for future agents.
 

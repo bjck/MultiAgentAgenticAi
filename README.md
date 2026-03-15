@@ -18,8 +18,11 @@ Agents can be assigned specific roles such as **Analysis**, **Research**, **Engi
 ### 4. Seamless Synthesis
 Once all parallel tasks are completed, a **Synthesis Agent** gathers the results, resolves any conflicts, and combines the individual outputs into a unified, high-quality final response.
 
-### 5. Filesystem Access via MCP
-Integrated with the **Model Context Protocol (MCP)**, the agents have controlled access to the project workspace. They can read, write, and analyze files directly, allowing them to perform real-world engineering and research tasks.
+### 5. Tool Access via MCP and Local Tools
+Tooling is controlled by the database, not `application.yml`. The system supports:
+- **Local tools** (in-process) such as `http_fetch` and `arxiv_api_reader`.
+- **MCP servers** configured via the UI (HTTP/SSE or Streamable HTTP transports).
+Roles are granted tools via DB-backed policies, so tools can be enabled/disabled without redeploys.
 
 ### 6. Interactive Studio UI
 The project includes a modern, dark-themed web interface for:
@@ -60,6 +63,9 @@ multiagent:
   worker-concurrency: 4  # Concurrent execution thread pool size
   worker-timeout: 90s    # Per-worker execution timeout
 ```
+Tool configuration is not in `application.yml`. Use the **Settings** panel in the UI to manage:
+- Tool policies per role
+- MCP server connections (HTTP/SSE or Streamable HTTP)
 
 ### Running the Application
 ```powershell
@@ -77,6 +83,85 @@ Access the UI at `http://localhost:8080`.
 - `src/main/java/com/bko/api`: REST controllers for chat, planning, and file operations.
 - `src/main/resources/static`: Studio UI assets.
 - `assets/`: Documentation assets (images, etc.).
+- `deploy/`: Optional deployment examples (Loki/Grafana and Promtail config).
+
+## 📈 Structured Logging and Ingestion
+
+The backend now emits JSON logs by default (`src/main/resources/logback-spring.xml`) and injects
+correlation fields via `RequestCorrelationFilter`:
+
+- `requestId`
+- `traceId`
+- `httpMethod`
+- `httpPath`
+- optional `runId` and `sessionId` (when available as request params)
+
+This is intended for log ingestion into systems like Loki, ELK/OpenSearch, or Datadog.
+
+### Quick self-hosted setup (Ubuntu)
+
+1. Start Loki + Grafana:
+
+```bash
+cd deploy
+docker compose -f loki-docker-compose.yml up -d
+```
+
+> Security: this compose binds Grafana/Loki to `127.0.0.1` only, so they are not exposed on public interfaces.
+
+2. Install Promtail on the host and use `deploy/promtail-config.yml`:
+
+```bash
+# Example install location
+sudo mkdir -p /etc/promtail
+sudo cp deploy/promtail-config.yml /etc/promtail/config.yml
+```
+
+3. Ensure your app runs as systemd unit `ai-agent.service` (or update the regex in the Promtail config).
+
+4. Expose Grafana to your **tailnet only** with Tailscale Serve (no public internet):
+
+```bash
+sudo tailscale serve --https=443 http://127.0.0.1:3000
+```
+
+Then open `https://<your-hostname>.<tailnet>.ts.net` from a logged-in Tailscale device.
+
+5. In Grafana, add Loki datasource `http://localhost:3100`, and query:
+
+```text
+{app="multiagent", unit="ai-agent.service"}
+```
+
+Note: `http://<host>:3100` returning `404 page not found` at `/` is expected for Loki.  
+Use the datasource URL `http://localhost:3100` inside Grafana or Loki API paths (for example `/loki/api/v1/query`).
+
+### Important note
+
+For token counts to persist in `prompt_log`, deploy with Liquibase migrations enabled:
+
+```bash
+export LIQUIBASE_ENABLED=true
+```
+
+## 🔌 MCP Servers and Tools
+
+### MCP Server Registry (DB-backed)
+MCP connections are stored in the database and managed via the UI:
+- `GET /api/config/mcp-servers`
+- `PUT /api/config/mcp-servers`
+
+Supported transports:
+- `SSE` (Server-Sent Events)
+- `STREAMABLE_HTTP`
+
+### Local Tools
+Tools registered in-process:
+- `http_fetch`: HTTP(S) fetch with size and timeout limits.
+- `arxiv_api_reader`: Queries the arXiv API and stores **abstracts only** (no PDF downloads).
+
+### External Documentation Storage
+Parsed documents are stored in the `external_document` table with source, title, abstract, authors, categories, and timestamps.
 
 ---
 *Developed as a reference implementation for Multi-Agent Agentic AI patterns.*

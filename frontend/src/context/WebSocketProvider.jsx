@@ -9,10 +9,16 @@ const normalizePlanPayload = (payload) => {
   const plan = payload.plan ? payload.plan : payload;
   const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
   const findings = Array.isArray(payload.findings) ? payload.findings : [];
+  const skillPlans = Array.isArray(payload.skillPlans)
+    ? payload.skillPlans
+    : Array.isArray(plan.skillPlans)
+      ? plan.skillPlans
+      : [];
   return {
     objective: plan.objective || '',
     tasks,
     findings,
+    skillPlans,
     planId: payload.planId || payload.plan_id || '',
     sessionId: payload.sessionId || payload.session_id || '',
     status: payload.status || '',
@@ -345,6 +351,15 @@ export const WebSocketProvider = ({ children }) => {
     await requestPlan(combined);
   };
 
+  const runDirectFromPlan = async () => {
+    if (!lastPrompt) {
+      appendMessage({ type: 'system', content: 'No previous request to run directly.' });
+      return;
+    }
+    // Reuse the streaming flow for the original prompt, even if a plan was generated.
+    await sendMessage(lastPrompt);
+  };
+
   const cancelAgentRun = async () => {
     if (!runIdRef.current) {
       appendMessage({ type: 'system', content: 'No active run to cancel.' });
@@ -397,6 +412,7 @@ export const WebSocketProvider = ({ children }) => {
     isAgentWorking, // Expose isAgentWorking state
     cancelAgentRun, // Expose cancelAgentRun function
     runId: runIdRef.current, // Expose runId for potential use
+    runDirectFromPlan,
   };
 
   return (

@@ -41,7 +41,6 @@ const SkillManager = () => {
   const availableScopes = useMemo(() => {
     const scopes = [
       { key: 'orchestrator', label: 'Orchestrator' },
-      { key: 'synthesis', label: 'Synthesis' },
       { key: 'worker-defaults', label: 'Worker Defaults' },
     ];
     if (skillsData?.workerRoles) {
@@ -55,7 +54,6 @@ const SkillManager = () => {
   const currentSkills = useMemo(() => {
     if (!skillsData) return [];
     if (scope === 'orchestrator') return skillsData.orchestrator || [];
-    if (scope === 'synthesis') return skillsData.synthesis || [];
     if (scope === 'worker-defaults') return skillsData.workerDefaults || [];
     if (scope.startsWith('worker:')) {
       const role = scope.split(':')[1];
@@ -71,7 +69,6 @@ const SkillManager = () => {
     try {
       let endpoint = '';
       if (scope === 'orchestrator') endpoint = '/api/config/skills/orchestrator';
-      else if (scope === 'synthesis') endpoint = '/api/config/skills/synthesis';
       else if (scope === 'worker-defaults') endpoint = '/api/config/skills/worker-defaults';
       else if (scope.startsWith('worker:')) {
         const role = scope.split(':')[1];
@@ -91,7 +88,6 @@ const SkillManager = () => {
         if (!prev) return prev;
         const next = { ...prev };
         if (scope === 'orchestrator') next.orchestrator = updated;
-        else if (scope === 'synthesis') next.synthesis = updated;
         else if (scope === 'worker-defaults') next.workerDefaults = updated;
         else if (scope.startsWith('worker:')) {
           const role = scope.split(':')[1];

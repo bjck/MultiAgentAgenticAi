@@ -6,7 +6,7 @@ import PlanPreview from './PlanPreview';
 import '../styles/ChatContainer.css';
 
 const ChatContainer = () => {
-  const { messages, plan, isAgentWorking, executePlan, requestPlanRevision, cancelAgentRun } = useWebSocket();
+  const { messages, plan, isAgentWorking, executePlan, requestPlanRevision, cancelAgentRun, runDirectFromPlan } = useWebSocket();
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -25,6 +25,7 @@ const ChatContainer = () => {
             plan={plan}
             onExecute={executePlan}
             onRevise={requestPlanRevision}
+            onRunDirect={runDirectFromPlan}
             isAgentWorking={isAgentWorking}
           />
         )}

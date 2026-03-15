@@ -1,0 +1,113 @@
+.mcp-settings {
+  margin-top: 24px;
+  padding: 16px;
+  border-radius: 12px;
+  background: #0f1628;
+  color: #e6ecff;
+}
+
+.mcp-settings-subtitle {
+  font-size: 0.9rem;
+  color: #9fb0d9;
+  margin-bottom: 16px;
+}
+
+.mcp-settings-error,
+.mcp-settings-message {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.mcp-settings-error {
+  background: rgba(255, 90, 90, 0.12);
+  color: #ffb3b3;
+}
+
+.mcp-settings-message {
+  background: rgba(95, 211, 144, 0.12);
+  color: #9ef5c4;
+}
+
+.mcp-settings-empty {
+  font-size: 0.9rem;
+  color: #9fb0d9;
+  padding: 8px 0;
+}
+
+.mcp-settings-list {
+  display: grid;
+  gap: 16px;
+}
+
+.mcp-settings-card {
+  border: 1px solid rgba(159, 176, 217, 0.2);
+  border-radius: 10px;
+  padding: 14px;
+  background: #141c30;
+}
+
+.mcp-settings-row {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mcp-settings-row label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8ea4d1;
+}
+
+.mcp-settings-row input,
+.mcp-settings-row select,
+.mcp-settings-row textarea {
+  background: #0b1020;
+  border: 1px solid rgba(159, 176, 217, 0.25);
+  color: #e6ecff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.95rem;
+}
+
+.mcp-settings-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mcp-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mcp-settings-actions .mcp-remove {
+  background: transparent;
+  border: 1px solid rgba(255, 126, 126, 0.6);
+  color: #ff9b9b;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.mcp-settings-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.mcp-settings-footer button {
+  background: #2b67f6;
+  border: none;
+  color: #f7f9ff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mcp-settings-footer button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

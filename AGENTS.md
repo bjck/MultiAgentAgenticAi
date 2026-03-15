@@ -4,29 +4,29 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Project Overview
 
-Multi-agent AI orchestration system built with Spring Boot 3.5 and Spring AI 1.1. The app decomposes user requests into parallel tasks, assigns them to specialized roles, and synthesizes results. Uses Google Gemini (gemini-2.5-flash) by default and MCP (Model Context Protocol) for filesystem tool access.
+Multi-agent AI orchestration system built with Spring Boot 3.5 and Spring AI 1.1. The app decomposes user requests into parallel tasks, assigns them to specialized roles, and synthesizes results. Uses Google Gemini (gemini-2.5-flash) by default. Tooling is DB-controlled and can include local tools plus MCP (Model Context Protocol) servers.
 
 ## Repo Layout
 
 - Root is a Maven multi-module build.
 - `backend/` is a Maven module that compiles sources from `src/main/java` and resources from `src/main/resources`.
-- `frontend/` is a Vite React SPA module that outputs static assets into `src/main/resources/static`.
+- `frontend/` is a Vite React SPA module bundled into the backend fatjar.
 - Frontend-specific notes are in `frontend/AGENTS.md`.
 
 ## Build & Run Commands
 
 ```powershell
-# Build everything
+# Build everything (produces fatjar)
 mvn clean package
 
-# Build only frontend
-mvn -pl frontend clean package
+# Run full build with tests
+mvn clean install
 
-# Run backend (dev)
-mvn -pl backend spring-boot:run
-
-# Run packaged backend JAR
+# Run packaged fatjar (includes frontend)
 java -jar backend\target\backend-0.0.1-SNAPSHOT.jar
+
+# Deploy to remote server (via profile)
+mvn -pl backend -Pdeploy clean install
 
 # Frontend dev server (hot reload)
 cd frontend
@@ -40,7 +40,6 @@ npm run dev
 - `OPENAI_API_KEY` (optional) - OpenAI API key
 - `OPENAI_BASE_URL` (optional) - Override OpenAI base URL
 - `WORKSPACE_ROOT` (optional) - Root directory for file operations, defaults to current directory
-- `MCP_FS_*` (optional) - Override MCP filesystem server command/args for non-Windows platforms
 - `LIQUIBASE_ENABLED` (optional) - Set to `true` to enable database migrations and persistence (default: `false`)
 - `SPRING_DATASOURCE_URL` (optional) - JDBC URL for PostgreSQL
 - `SPRING_DATASOURCE_USERNAME` (optional)
@@ -85,26 +84,26 @@ Tool calls are logged per session/task in `tool_call_log`. Orchestrator also log
 - `WebSocket` streaming endpoint:
   - `/ws/stream?runId=...` - server push events
 - `FileController` (`/api/files`) - File list and content read/write
-- `ConfigController` (`/api/config`) - Skills and role execution settings
+- `ConfigController` (`/api/config`) - Skills, role execution settings, and tool policies
 - `ModelController` (`/api/models`) - List available models (provider optional)
+- `McpServerController` (`/api/config/mcp-servers`) - MCP server registry (DB-backed)
 
 ## Frontend
 
 - Vite React SPA in `frontend/`
 - Entry file: `frontend/index.html`
-- Build output: `src/main/resources/static`
+- Build output: bundled into backend JAR (served from frontend JAR dependency)
 - Dev proxy: `/api` and `/ws` to `localhost:8080`
-- Sidebar includes File Manager, Skills, and Role Settings
+- Sidebar includes File Manager, Skills, Role Settings, Tool Policies, and MCP Servers
 
 ## MCP Integration
 
-MCP filesystem server provides tools (list/read/write). On Windows it uses:
+MCP servers are configured in the database and managed via the UI (`Settings → MCP Servers`).
+Supported transports:
+- `SSE`
+- `STREAMABLE_HTTP`
 
-```
-cmd.exe /c npx -y @modelcontextprotocol/server-filesystem
-```
-
-Override via `MCP_FS_*` env vars for non-Windows platforms.
+Tool access is granted per role via DB-backed policies (`Settings → Tool Policies`).
 
 ## Database & Persistence
 
@@ -112,6 +111,7 @@ PostgreSQL stores:
 - Agent configuration, skills, and tool policies
 - Orchestration logs: session, prompts, plans, tasks, worker results
 - Tool call logs: `tool_call_log`
+- External documentation: `external_document`
 
 Migrations are managed via Liquibase in `src/main/resources/db/changelog`.
 
@@ -140,30 +140,14 @@ multiagent:
 
 ## Agent Tools Configuration
 
-```yaml
-multiagent:
-  tools:
-    orchestrator: []
-    synthesis: []
-    worker-defaults:
-      - list_directory
-      - read_file
-    workers:
-      analysis:
-        - list_directory
-        - read_file
-      engineering:
-        - list_directory
-        - read_file
-      implementer:
-        - list_directory
-        - read_file
-        - write_file
-```
+Tool policies are stored in the database and edited via the UI. There is no `application.yml`
+tool configuration. Use:
+- `GET /api/config/tools`
+- `PUT /api/config/tools`
 
-Notes:
-- Orchestrator and synthesis phases default to no tools.
-- Implementer is the only write-enabled role by default.
+Local tools registered in-process:
+- `http_fetch`
+- `arxiv_api_reader` (stores abstracts only; no PDF downloads)
 
 ## Agent Skills Configuration
 

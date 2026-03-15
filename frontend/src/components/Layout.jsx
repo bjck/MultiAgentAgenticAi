@@ -7,7 +7,7 @@ const MAX_WIDTH = 520;
 
 const clamp = (value) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
 
-const Layout = ({ children }) => {
+const Layout = ({ children, activeView, onChangeView }) => {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(localStorage.getItem('sidebarWidth'));
     return Number.isFinite(saved) && saved > 0 ? clamp(saved) : 280;
@@ -43,7 +43,7 @@ const Layout = ({ children }) => {
 
   return (
     <div className="App">
-      <Header />
+      <Header activeView={activeView} onChangeView={onChangeView} />
       <div className="main-container">
         <div className="sidebar-wrapper" style={{ width: sidebarWidth }}>
           <Sidebar />
